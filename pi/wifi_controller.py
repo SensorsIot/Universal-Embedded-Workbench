@@ -19,6 +19,8 @@ import urllib.error
 import urllib.request
 from queue import Empty, Queue
 
+import sniffer
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -26,11 +28,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 WLAN_IF = os.environ.get("WIFI_WLAN_IF", "wlan0")
-AP_IP = os.environ.get("WIFI_AP_IP", "192.168.4.1")
-AP_NETMASK = os.environ.get("WIFI_AP_NETMASK", "255.255.255.0")
-AP_SUBNET = os.environ.get("WIFI_AP_SUBNET", "192.168.4.0/24")
-DHCP_RANGE_START = os.environ.get("WIFI_DHCP_START", "192.168.4.2")
-DHCP_RANGE_END = os.environ.get("WIFI_DHCP_END", "192.168.4.20")
+AP_IP = "192.168.4.1"
+AP_NETMASK = "255.255.255.0"
+AP_SUBNET = "192.168.4.0/24"
+DHCP_RANGE_START = "192.168.4.2"
+DHCP_RANGE_END = "192.168.4.20"
 DHCP_LEASE_TIME = "1h"
 
 WORK_DIR = "/tmp/wifi-tester"
@@ -221,8 +223,12 @@ def _flush_addr():
 # AP Mode
 # ---------------------------------------------------------------------------
 
-def ap_start(ssid, password="", channel=6):
-    """Start SoftAP on wlan0. Returns dict with ip."""
+def ap_start(ssid, password="", channel=6, dns_logging=False):
+    """Start SoftAP on wlan0. Returns dict with ip.
+
+    If dns_logging=True, dnsmasq is configured with DNS forwarding
+    (8.8.8.8/8.8.4.4) and query logging for the sniffer.
+    """
     global _ap_active, _ap_ssid, _ap_password, _ap_channel
     global _ap_hostapd_proc, _ap_dnsmasq_proc
 
@@ -258,6 +264,7 @@ def ap_start(ssid, password="", channel=6):
 
         # Write dnsmasq config
         lease_script = "/usr/local/bin/wifi-lease-notify.sh"
+        dns_log = os.path.join(WORK_DIR, "dns.log")
         dnsmasq_lines = [
             f"interface={WLAN_IF}",
             "bind-interfaces",
@@ -267,6 +274,13 @@ def ap_start(ssid, password="", channel=6):
             "no-daemon",
             "log-dhcp",
         ]
+        if dns_logging:
+            dnsmasq_lines += [
+                "server=8.8.8.8",
+                "server=8.8.4.4",
+                "log-queries",
+                f"log-facility={dns_log}",
+            ]
         if os.path.exists(lease_script):
             dnsmasq_lines.append(f"dhcp-script={lease_script}")
 
@@ -707,4 +721,82 @@ def ping():
     return {
         "fw_version": VERSION,
         "uptime": int(time.monotonic() - _start_time),
+    }
+
+
+# ---------------------------------------------------------------------------
+# WiFi Sniffer
+# ---------------------------------------------------------------------------
+
+_sniffer_active = False
+_sniffer_ssid = ""
+
+def sniffer_start(ssid, password="", channel=6):
+    """Start AP with NAT + internet forwarding + sniffer capture.
+
+    Returns dict with ip and ssid.
+    """
+    global _sniffer_active, _sniffer_ssid
+
+    _check_wifi_testing_mode()
+
+    # Start AP with DNS logging enabled
+    result = ap_start(ssid, password, channel, dns_logging=True)
+
+    # Enable IP forwarding
+    _run(["sysctl", "-w", "net.ipv4.ip_forward=1"], check=False)
+
+    # Add NAT masquerade on eth0
+    _run(["iptables", "-t", "nat", "-A", "POSTROUTING", "-o", "eth0",
+          "-j", "MASQUERADE"], check=False)
+    _run(["iptables", "-A", "FORWARD", "-i", WLAN_IF, "-o", "eth0",
+          "-j", "ACCEPT"], check=False)
+    _run(["iptables", "-A", "FORWARD", "-i", "eth0", "-o", WLAN_IF,
+          "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+         check=False)
+
+    # Start sniffer capture threads
+    dns_log = os.path.join(WORK_DIR, "dns.log")
+    sniffer.start(interface=WLAN_IF, log_path=dns_log)
+
+    _sniffer_active = True
+    _sniffer_ssid = ssid
+    logger.info("Sniffer started: ssid=%s", ssid)
+    return {"ip": AP_IP, "ssid": ssid}
+
+
+def sniffer_stop():
+    """Stop sniffer capture + NAT + AP."""
+    global _sniffer_active, _sniffer_ssid
+
+    # Stop sniffer threads
+    sniffer.stop()
+
+    # Remove NAT rules
+    _run(["iptables", "-t", "nat", "-D", "POSTROUTING", "-o", "eth0",
+          "-j", "MASQUERADE"], check=False)
+    _run(["iptables", "-D", "FORWARD", "-i", WLAN_IF, "-o", "eth0",
+          "-j", "ACCEPT"], check=False)
+    _run(["iptables", "-D", "FORWARD", "-i", "eth0", "-o", WLAN_IF,
+          "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+         check=False)
+
+    # Disable IP forwarding
+    _run(["sysctl", "-w", "net.ipv4.ip_forward=0"], check=False)
+
+    # Stop AP
+    ap_stop()
+
+    _sniffer_active = False
+    _sniffer_ssid = ""
+    logger.info("Sniffer stopped")
+
+
+def sniffer_status() -> dict:
+    """Return sniffer state + traffic summary."""
+    return {
+        "active": _sniffer_active,
+        "ssid": _sniffer_ssid if _sniffer_active else "",
+        "summary": sniffer.get_summary() if _sniffer_active else {},
+        "stations": list(_stations.values()) if _sniffer_active else [],
     }

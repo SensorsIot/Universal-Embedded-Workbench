@@ -1,104 +1,125 @@
 #!/bin/bash
-# Install RFC2217 Portal v3 on Raspberry Pi
+# Install RFC2217 Portal on Raspberry Pi
+#
+# Usage:
+#   sudo bash install.sh              # full install (first time)
+#   sudo bash install.sh --update     # update scripts only (no system changes)
+#
+# See pi/README.md for the full SD card rebuild procedure.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+UPDATE_ONLY=false
+if [ "$1" = "--update" ]; then
+    UPDATE_ONLY=true
+fi
 
-echo "=== Installing RFC2217 Portal v5 ==="
+echo "=== Installing RFC2217 Portal ==="
 
-# Install dependencies
-echo "Installing dependencies..."
-sudo apt-get install -y python3-serial python3-pip hostapd dnsmasq-base curl bluetooth bluez
-sudo pip3 install esptool bleak --break-system-packages 2>/dev/null || true
+# ---------------------------------------------------------------------------
+# 1. System packages
+# ---------------------------------------------------------------------------
+if [ "$UPDATE_ONLY" = false ]; then
+    echo "Installing system packages..."
+    apt-get update -qq
+    apt-get install -y \
+        python3-serial python3-pip python3-libgpiod \
+        hostapd dnsmasq-base \
+        mosquitto mosquitto-clients \
+        curl iptables \
+        bluetooth bluez
 
-# Disable hostapd/dnsmasq system services (we manage them ourselves)
-sudo systemctl disable --now hostapd 2>/dev/null || true
-sudo systemctl disable --now dnsmasq 2>/dev/null || true
+    # Python packages not available via apt
+    pip3 install esptool bleak --break-system-packages 2>/dev/null || true
+fi
 
-# Create directories
+# ---------------------------------------------------------------------------
+# 2. Disable services we manage dynamically
+# ---------------------------------------------------------------------------
+if [ "$UPDATE_ONLY" = false ]; then
+    echo "Configuring managed services..."
+    systemctl disable --now hostapd 2>/dev/null || true
+    systemctl mask hostapd 2>/dev/null || true
+    systemctl disable --now dnsmasq 2>/dev/null || true
+    systemctl disable --now mosquitto 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Create directories
+# ---------------------------------------------------------------------------
 echo "Creating directories..."
-sudo mkdir -p /etc/rfc2217
+mkdir -p /etc/rfc2217
+mkdir -p /var/lib/rfc2217/firmware
+mkdir -p /tmp/wifi-tester
 
-# Install Python scripts
+# ---------------------------------------------------------------------------
+# 4. Install Python scripts
+# ---------------------------------------------------------------------------
 echo "Installing scripts..."
-sudo cp "$SCRIPT_DIR/portal.py" /usr/local/bin/rfc2217-portal
-sudo cp "$SCRIPT_DIR/plain_rfc2217_server.py" /usr/local/bin/plain_rfc2217_server.py
-sudo cp "$SCRIPT_DIR/wifi_controller.py" /usr/local/bin/wifi_controller.py
-sudo cp "$SCRIPT_DIR/ble_controller.py" /usr/local/bin/ble_controller.py
-sudo cp "$SCRIPT_DIR/rfc2217-learn-slots" /usr/local/bin/rfc2217-learn-slots
+cp "$SCRIPT_DIR/portal.py"                  /usr/local/bin/rfc2217-portal
+cp "$SCRIPT_DIR/plain_rfc2217_server.py"    /usr/local/bin/plain_rfc2217_server.py
+cp "$SCRIPT_DIR/wifi_controller.py"         /usr/local/bin/wifi_controller.py
+cp "$SCRIPT_DIR/ble_controller.py"          /usr/local/bin/ble_controller.py
+cp "$SCRIPT_DIR/mqtt_controller.py"         /usr/local/bin/mqtt_controller.py
+cp "$SCRIPT_DIR/sniffer.py"                 /usr/local/bin/sniffer.py
+cp "$SCRIPT_DIR/rfc2217-learn-slots"        /usr/local/bin/rfc2217-learn-slots
 
-sudo chmod +x /usr/local/bin/rfc2217-portal
-sudo chmod +x /usr/local/bin/plain_rfc2217_server.py
-sudo chmod +x /usr/local/bin/rfc2217-learn-slots
+chmod +x /usr/local/bin/rfc2217-portal
+chmod +x /usr/local/bin/plain_rfc2217_server.py
+chmod +x /usr/local/bin/rfc2217-learn-slots
 
-# Install udev notify script
-echo "Installing udev notify script..."
-sudo cp "$SCRIPT_DIR/scripts/rfc2217-udev-notify.sh" /usr/local/bin/rfc2217-udev-notify.sh
-sudo chmod +x /usr/local/bin/rfc2217-udev-notify.sh
+# ---------------------------------------------------------------------------
+# 5. Install helper scripts
+# ---------------------------------------------------------------------------
+echo "Installing helper scripts..."
+cp "$SCRIPT_DIR/scripts/rfc2217-udev-notify.sh" /usr/local/bin/rfc2217-udev-notify.sh
+chmod +x /usr/local/bin/rfc2217-udev-notify.sh
 
-# Install WiFi lease notify script
-echo "Installing WiFi lease notify script..."
-sudo cp "$SCRIPT_DIR/scripts/wifi-lease-notify.sh" /usr/local/bin/wifi-lease-notify.sh
-sudo chmod +x /usr/local/bin/wifi-lease-notify.sh
+cp "$SCRIPT_DIR/scripts/wifi-lease-notify.sh" /usr/local/bin/wifi-lease-notify.sh
+chmod +x /usr/local/bin/wifi-lease-notify.sh
 
-# Install config (don't overwrite existing)
+# ---------------------------------------------------------------------------
+# 6. Install config files (don't overwrite existing)
+# ---------------------------------------------------------------------------
 if [ ! -f /etc/rfc2217/slots.json ]; then
-    echo "Installing default config..."
-    sudo cp "$SCRIPT_DIR/config/slots.json" /etc/rfc2217/slots.json
+    echo "Installing default slot config..."
+    cp "$SCRIPT_DIR/config/slots.json" /etc/rfc2217/slots.json
 else
-    echo "Config already exists, skipping..."
+    echo "Slot config already exists, skipping..."
 fi
 
-# Create WiFi tester work directory
-echo "Creating WiFi tester work directory..."
-sudo mkdir -p /tmp/wifi-tester
-
-# Create firmware repository directory
-echo "Creating firmware directory..."
-sudo mkdir -p /var/lib/rfc2217/firmware
-
-# Configure eth0 for DHCP (if not already configured)
-if ! grep -q "eth0" /etc/network/interfaces 2>/dev/null; then
-    echo "Configuring eth0 for DHCP..."
-    cat <<'ETHEOF' | sudo tee -a /etc/network/interfaces >/dev/null
-
-# USB Ethernet adapter — primary network for portal access
-allow-hotplug eth0
-iface eth0 inet dhcp
-ETHEOF
+# Mosquitto test broker config
+if [ "$UPDATE_ONLY" = false ]; then
+    echo "Installing MQTT broker config..."
+    cp "$SCRIPT_DIR/config/mosquitto-test-broker.conf" /etc/mosquitto/conf.d/test-broker.conf
+    # Create empty password file if it doesn't exist
+    touch /etc/mosquitto/passwd
+    chown mosquitto:mosquitto /etc/mosquitto/passwd
 fi
 
-# Stop wpa_supplicant from managing wlan0 automatically
-echo "Configuring wlan0 for manual management..."
-if [ -f /etc/wpa_supplicant/wpa_supplicant.conf ]; then
-    sudo mv /etc/wpa_supplicant/wpa_supplicant.conf \
-            /etc/wpa_supplicant/wpa_supplicant.conf.bak 2>/dev/null || true
-fi
+# ---------------------------------------------------------------------------
+# 7. Install systemd service and udev rules
+# ---------------------------------------------------------------------------
+echo "Installing systemd service and udev rules..."
+cp "$SCRIPT_DIR/systemd/rfc2217-portal.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/udev/99-rfc2217-hotplug.rules" /etc/udev/rules.d/
 
-# Install systemd services
-echo "Installing systemd services..."
-sudo cp "$SCRIPT_DIR/systemd/rfc2217-portal.service" /etc/systemd/system/
+systemctl daemon-reload
+udevadm control --reload-rules
 
-# Install udev rules
-echo "Installing udev rules..."
-sudo cp "$SCRIPT_DIR/udev/99-rfc2217-hotplug.rules" /etc/udev/rules.d/
-
-# Reload systemd and udev
-echo "Reloading systemd and udev..."
-sudo systemctl daemon-reload
-sudo udevadm control --reload-rules
-
-# Enable and start portal service
+# ---------------------------------------------------------------------------
+# 8. Enable and start
+# ---------------------------------------------------------------------------
 echo "Enabling portal service..."
-sudo systemctl enable rfc2217-portal
-sudo systemctl restart rfc2217-portal
+systemctl enable rfc2217-portal
+systemctl restart rfc2217-portal
 
 echo ""
 echo "=== Installation complete ==="
 echo ""
 echo "Portal running at: http://$(hostname -I | awk '{print $1}'):8080"
 echo ""
-echo "To discover slot keys, plug in devices and run:"
-echo "  rfc2217-learn-slots"
-echo ""
-echo "Then edit /etc/rfc2217/slots.json with your slot configuration."
+echo "Next steps:"
+echo "  1. Discover slot keys:  rfc2217-learn-slots"
+echo "  2. Edit config:         sudo nano /etc/rfc2217/slots.json"
+echo "  3. Restart portal:      sudo systemctl restart rfc2217-portal"
