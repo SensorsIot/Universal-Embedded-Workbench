@@ -22,7 +22,7 @@ and reporting station events — all controlled over the same HTTP API.
        ▼                                               ▼
 ┌─────────────────────────┐              ┌─────────────────────────────────┐
 │  Serial Portal Pi       │              │  VM Host (192.168.0.160)        │
-│  192.168.0.87           │              │                                 │
+│  esp32-workbench.local           │              │                                 │
 │                         │              │  ┌─────────────────────┐        │
 │  ┌───────────┐          │              │  │ Container A         │        │
 │  │ SLOT1     │──────────┼─ :4001 ──────┼──│ rfc2217://:4001     │        │
@@ -66,7 +66,7 @@ and reporting station events — all controlled over the same HTTP API.
 
 | Component | Details |
 |-----------|---------|
-| Raspberry Pi Zero W | 192.168.0.87, onboard wlan0 radio |
+| Raspberry Pi Zero W | esp32-workbench.local, onboard wlan0 radio |
 | USB Hub | 3-port hub connected to single USB port |
 | USB Ethernet adapter | eth0 — wired LAN for management and serial traffic |
 | Devices | ESP32, Arduino, or any USB serial device |
@@ -270,7 +270,7 @@ Configuration file: `/etc/rfc2217/slots.json`
       "running": true,
       "devnode": "/dev/ttyACM0",
       "pid": 1234,
-      "url": "rfc2217://192.168.0.87:4001",
+      "url": "rfc2217://esp32-workbench.local:4001",
       "seq": 5,
       "last_action": "add",
       "last_event_ts": "2026-02-05T12:34:56+00:00",
@@ -279,8 +279,8 @@ Configuration file: `/etc/rfc2217/slots.json`
       "state": "idle"
     }
   ],
-  "host_ip": "192.168.0.87",
-  "hostname": "192.168.0.87"
+  "host_ip": "esp32-workbench.local",
+  "hostname": "esp32-workbench.local"
 }
 ```
 
@@ -427,7 +427,7 @@ through directly.
 
 ```bash
 python3 -m esptool --chip esp32c3 \
-  --port "rfc2217://192.168.0.87:4001" \
+  --port "rfc2217://esp32-workbench.local:4001" \
   --before=usb-reset --after=watchdog-reset \
   write_flash 0x10000 firmware.bin
 ```
@@ -436,7 +436,7 @@ python3 -m esptool --chip esp32c3 \
 
 ```bash
 python3 -m esptool --chip esp32 \
-  --port "rfc2217://192.168.0.87:4001" \
+  --port "rfc2217://esp32-workbench.local:4001" \
   --before=default-reset --after=hard-reset \
   write_flash 0x10000 firmware.bin
 ```
@@ -461,7 +461,7 @@ window between reboots.  Use `erase_flash` to wipe the bad firmware and stop
 the loop:
 
 ```bash
-esptool.py --port "rfc2217://192.168.0.87:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=usb_reset erase_flash
 ```
 
@@ -477,7 +477,7 @@ When connecting to an ESP32-C3 via RFC2217, the client must prevent DTR
 assertion during connection negotiation:
 
 ```python
-ser = serial.serial_for_url('rfc2217://192.168.0.87:4001', do_not_open=True)
+ser = serial.serial_for_url('rfc2217://esp32-workbench.local:4001', do_not_open=True)
 ser.baudrate = 115200
 ser.timeout = 2
 ser.dtr = False   # CRITICAL: prevents download mode
@@ -605,7 +605,7 @@ The device is now stable in the bootloader.  Flash firmware directly on
 the Pi (the RFC2217 proxy is not running in this state):
 
 ```bash
-ssh pi@192.168.0.87 "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
+ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
   write_flash 0x0 bootloader.bin 0x8000 partition-table.bin \
   0xf000 ota_data_initial.bin 0x20000 app.bin"
 ```
@@ -1049,7 +1049,7 @@ wt.udplog_clear()
 **Implementation notes:**
 - Thread-safe: deque operations are atomic; timestamp+source stored per entry
 - Non-blocking: UDP recv in a loop with 1s timeout for clean shutdown
-- ESP32 remote_log.c sends to the configured host:port (default 192.168.0.87:5555)
+- ESP32 remote_log.c sends to the configured host:port (default esp32-workbench.local:5555)
 
 ### FR-021 — OTA Firmware Repository
 
@@ -1087,7 +1087,7 @@ internet access or external hosting during development and testing.
 Serves the raw binary file with `Content-Type: application/octet-stream`.
 This is the URL the ESP32 OTA client points to, e.g.:
 ```
-http://192.168.0.87:8080/firmware/ios-keyboard/ios-keyboard.bin
+http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
 ```
 
 Path traversal is rejected (no `..` allowed in project or filename).
@@ -1124,7 +1124,7 @@ Path traversal is rejected (no `..` allowed in project or filename).
 files = wt.firmware_list()
 wt.firmware_upload("ios-keyboard", "/path/to/ios-keyboard.bin")
 wt.firmware_delete("ios-keyboard", "ios-keyboard.bin")
-# ESP32 OTA URL: http://192.168.0.87:8080/firmware/ios-keyboard/ios-keyboard.bin
+# ESP32 OTA URL: http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
 ```
 
 **End-to-end OTA workflow:**
@@ -1147,7 +1147,7 @@ client on the LAN.
    POST /api/wifi/http  {"method":"POST", "url":"http://192.168.4.15/ota"}
    ```
    The ESP32 must expose a `POST /ota` endpoint that calls `esp_ota_ops`
-   to download from `http://192.168.0.87:8080/firmware/<project>/<file>.bin`.
+   to download from `http://esp32-workbench.local:8080/firmware/<project>/<file>.bin`.
 4. **Monitor progress** via UDP logs:
    ```
    GET /api/udplog?source=192.168.4.15
@@ -1878,7 +1878,7 @@ Add this to /etc/rfc2217/slots.json:
 - [x] TASK-009: Update web UI to show slot-based view
 - [x] TASK-010: Boot scan for already-plugged devices
 - [ ] TASK-011: Test all test cases
-- [ ] TASK-012: Deploy to Serial Pi (192.168.0.87)
+- [ ] TASK-012: Deploy to Serial Pi (esp32-workbench.local)
 
 **Serial Services (v6.0):**
 - [ ] TASK-050: Implement `POST /api/serial/reset` (FR-008)

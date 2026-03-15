@@ -5,7 +5,21 @@ description: OTA firmware upload, listing, deletion, and over-the-air update for
 
 # ESP32 OTA & Firmware Repository
 
-Base URL: `http://192.168.0.87:8080`
+Base URL: `http://esp32-workbench.local:8080`
+
+## Step 0: Discover Workbench
+
+Before using any workbench API, ensure `esp32-workbench.local` resolves:
+
+```bash
+curl -s http://esp32-workbench.local:8080/api/info
+```
+
+If that fails, run the discovery script from the workbench repo:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
 
 ## When to Use OTA (vs Serial Flashing)
 
@@ -35,7 +49,7 @@ Base URL: `http://192.168.0.87:8080`
 ### Step 1: Upload firmware to workbench
 
 ```bash
-curl -X POST http://192.168.0.87:8080/api/firmware/upload \
+curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
   -F "project=my-project" \
   -F "file=@build/firmware.bin"
 ```
@@ -45,25 +59,25 @@ Response: `{"ok": true, "project": "my-project", "filename": "firmware.bin", "si
 ### Step 2: Verify upload
 
 ```bash
-curl -s http://192.168.0.87:8080/api/firmware/list | jq .
+curl -s http://esp32-workbench.local:8080/api/firmware/list | jq .
 ```
 
 ### Step 3: Ensure device is on the network
 
-The device must be able to reach `http://192.168.0.87:8080`. Use enter-portal to provision if needed (see esp32-workbench-wifi).
+The device must be able to reach `http://esp32-workbench.local:8080`. Use enter-portal to provision if needed (see esp32-workbench-wifi).
 
 ### Step 4: Clear UDP log buffer (for clean monitoring)
 
 ```bash
-curl -X DELETE http://192.168.0.87:8080/api/udplog
+curl -X DELETE http://esp32-workbench.local:8080/api/udplog
 ```
 
 ### Step 5: Trigger OTA on the ESP32 via HTTP relay
 
 ```bash
-OTA_BODY=$(echo -n '{"url":"http://192.168.0.87:8080/firmware/my-project/firmware.bin"}' | base64)
+OTA_BODY=$(echo -n '{"url":"http://esp32-workbench.local:8080/firmware/my-project/firmware.bin"}' | base64)
 
-curl -X POST http://192.168.0.87:8080/api/wifi/http \
+curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
   -H 'Content-Type: application/json' \
   -d "{\"method\": \"POST\", \"url\": \"http://192.168.4.2/ota\", \"headers\": {\"Content-Type\": \"application/json\"}, \"body\": \"$OTA_BODY\", \"timeout\": 30}"
 ```
@@ -72,10 +86,10 @@ curl -X POST http://192.168.0.87:8080/api/wifi/http \
 
 ```bash
 # Via UDP logs (preferred — non-blocking)
-curl "http://192.168.0.87:8080/api/udplog?limit=50"
+curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
 
 # Or via serial monitor (see esp32-workbench-logging)
-curl -X POST http://192.168.0.87:8080/api/serial/monitor \
+curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1", "pattern": "OTA.*complete", "timeout": 60}'
 ```
@@ -84,15 +98,15 @@ curl -X POST http://192.168.0.87:8080/api/serial/monitor \
 
 ```bash
 # List all uploaded firmware
-curl http://192.168.0.87:8080/api/firmware/list
+curl http://esp32-workbench.local:8080/api/firmware/list
 
 # Delete a firmware file
-curl -X DELETE http://192.168.0.87:8080/api/firmware/delete \
+curl -X DELETE http://esp32-workbench.local:8080/api/firmware/delete \
   -H 'Content-Type: application/json' \
   -d '{"project": "my-project", "filename": "firmware.bin"}'
 
 # The download URL for ESP32 to fetch:
-# http://192.168.0.87:8080/firmware/<project>/<filename>
+# http://esp32-workbench.local:8080/firmware/<project>/<filename>
 ```
 
 ## Troubleshooting
@@ -101,7 +115,7 @@ curl -X DELETE http://192.168.0.87:8080/api/firmware/delete \
 |---------|-----|
 | Upload returns "expected multipart/form-data" | Use `-F` flags (not `-d`) for multipart upload |
 | File not in list after upload | Check project/filename; `..` and `/` are rejected |
-| ESP32 can't download firmware | Device must reach workbench at 192.168.0.87:8080; check WiFi |
+| ESP32 can't download firmware | Device must reach workbench at esp32-workbench.local:8080; check WiFi |
 | OTA trigger times out | Check device's OTA endpoint URL; increase HTTP relay timeout |
 | No progress in UDP logs | Device may not send UDP logs — check serial monitor instead (see esp32-workbench-logging) |
 | OTA trigger returns error | Verify device firmware has OTA endpoint; check relay response body |

@@ -238,7 +238,7 @@ OTA_TRIGGER       → ble / http / both
 Record project-specific values:
 - WiFi AP SSID for captive portal (e.g. `"KB-Setup"`)
 - BLE device name (e.g. `"iOS-KB"`)
-- OTA URL (e.g. `"http://192.168.0.87:8080/firmware/ios-keyboard/ios-keyboard.bin"`)
+- OTA URL (e.g. `"http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin"`)
 - NVS namespace
 - Any project-specific command opcodes
 
@@ -338,7 +338,7 @@ Ensure the canonical init order:
 1. NVS init (with erase-on-corrupt fallback)
 2. Boot count increment
 3. `esp_netif_init()` + `esp_event_loop_create_default()`
-4. `udp_log_init("192.168.0.87", 5555)`
+4. `udp_log_init("esp32-workbench.local", 5555)`
 5. Register IP event handler for HTTP server
 6. `wifi_prov_init()`
 7. `ble_nus_init(cmd_handler_on_rx)`
@@ -360,8 +360,8 @@ operations are the operational procedures for this project.
 
 Query the workbench for hardware details:
 ```bash
-curl -s http://192.168.0.87:8080/api/devices | jq .
-curl -s http://192.168.0.87:8080/api/info | jq .
+curl -s http://esp32-workbench.local:8080/api/devices | jq .
+curl -s http://esp32-workbench.local:8080/api/info | jq .
 ```
 
 Record: slot label, TCP port, RFC2217 URL, device state.
@@ -377,10 +377,10 @@ Write a hardware table and a project-specific values table:
 
 | What | Where |
 |------|-------|
-| ESP32 USB | Workbench slot <N>, serial at `rfc2217://192.168.0.87:<PORT>` |
-| Workbench host | `192.168.0.87:8080` |
-| UDP log sink | `192.168.0.87:5555` |
-| OTA firmware URL | `http://192.168.0.87:8080/firmware/<project>/<project>.bin` |
+| ESP32 USB | Workbench slot <N>, serial at `rfc2217://esp32-workbench.local:<PORT>` |
+| Workbench host | `esp32-workbench.local:8080` |
+| UDP log sink | `esp32-workbench.local:5555` |
+| OTA firmware URL | `http://esp32-workbench.local:8080/firmware/<project>/<project>.bin` |
 
 #### Project-Specific Values
 

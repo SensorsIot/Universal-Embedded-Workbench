@@ -1,11 +1,34 @@
 ---
 name: esp32-workbench-serial-flashing
-description: Device discovery, slot management, dual-USB hub boards, remote flashing via RFC2217, GPIO download mode, crash-loop recovery, and flapping. Triggers on "flash", "esptool", "device", "slot", "erase", "download mode", "crash loop", "flapping", "bricked".
+description: >
+  Use when flashing an ESP32 via the **ESP32 Workbench** (Raspberry Pi at
+  esp32-workbench.local). Covers device discovery, slot management, RFC2217 remote
+  flashing, building, GPIO download mode, crash-loop recovery, and flapping.
+  Triggers on "slot", "workbench", "esp32-workbench.local", "esptool", "erase",
+  "download mode", "crash loop", "flapping", "bricked".
+  Do NOT use this skill for local/direct USB flashing — use `idf-flash` instead.
 ---
 
-# ESP32 Serial Flashing
+# ESP32 Workbench — Build & Serial Flashing
 
-Base URL: `http://192.168.0.87:8080`
+> **If the device is connected locally via USB** (no workbench/slot involved),
+> use the `idf-flash` skill instead.
+
+## Step 0: Discover Workbench
+
+Before using any workbench API, run the discovery script to find the workbench
+and ensure `esp32-workbench.local` resolves:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
+
+This sends a UDP probe to every IP on the gateway subnet and writes the result
+to `/etc/hosts`. Once discovered, all subsequent commands use
+`http://esp32-workbench.local:8080`.
+
+If the workbench has already been discovered (i.e. `curl -s http://esp32-workbench.local:8080/api/info`
+returns a response), skip this step.
 
 ## When to Use Serial Flashing
 
@@ -14,6 +37,34 @@ Base URL: `http://192.168.0.87:8080`
 - You need to **erase NVS** or flash a **bootloader/partition table**
 - Device has **no WiFi connectivity**
 - **Alternative:** if device already runs OTA-capable firmware and is on WiFi, use OTA instead (see esp32-workbench-ota) — it's faster and doesn't block serial
+
+## Build Commands
+
+```bash
+source /opt/esp-idf/export.sh
+idf.py build                           # Build only
+idf.py fullclean                       # Clean build directory
+```
+
+## Flash Size and Partition Tables
+
+> **Flash size defaults to 4MB.** Use `CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y` in
+> `sdkconfig.defaults` and `--flash_size 4MB` with esptool. Only use a
+> different size when the actual flash is known (e.g. `esptool.py flash_id`
+> or from the datasheet).
+
+Partition tables must fit within the flash size. Two common layouts:
+
+| File | Flash size | App partition size | Use when |
+|------|-----------|-------------------|----------|
+| `partitions-4mb.csv` | 4MB (default) | 1216K | Unknown or 4MB flash |
+| `partitions.csv` | 8MB+ | 1536K | Flash confirmed > 4MB |
+
+Set the partition table in `sdkconfig.defaults`:
+```
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-4mb.csv"
+```
 
 ## Endpoints
 
@@ -30,7 +81,7 @@ Base URL: `http://192.168.0.87:8080`
 Always start here.
 
 ```bash
-curl -s http://192.168.0.87:8080/api/devices | jq .
+curl -s http://esp32-workbench.local:8080/api/devices | jq .
 ```
 
 Response fields per slot: `label`, `state`, `url` (RFC2217), `present`, `running`.
@@ -45,7 +96,7 @@ Response fields per slot: `label`, `state`, `url` (RFC2217), `present`, `running
 **For dual-USB boards**, identify which slot is which:
 
 ```bash
-ssh pi@192.168.0.87 "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
+ssh pi@esp32-workbench.local "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
 # Contains "Espressif" → JTAG slot (flash + reset here)
 # Contains "1a86", "CH340", "CP210x" → UART slot (serial console here)
 ```
@@ -62,14 +113,11 @@ ssh pi@192.168.0.87 "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
 
 Each slot exposes an RFC2217 URL from `/api/devices`. Use it with esptool.
 
-> **Flash size and partition layout:** see the `idf-flash` skill for the
-> authoritative flash size rule (default 4MB) and partition table selection.
-
 **Baud rate:** Native USB devices (ESP32-S3/C3 `ttyACM`) ignore the baud rate — data transfers at USB speed regardless. The effective throughput is limited by the RFC2217 TCP proxy (~300 kbit/s). UART-bridge devices (`ttyUSB`) respect the baud rate. Use `-b 921600` as a sensible default for both cases.
 
 ```bash
 # Get the RFC2217 URL
-SLOT_URL=$(curl -s http://192.168.0.87:8080/api/devices | jq -r '.slots[0].url')
+SLOT_URL=$(curl -s http://esp32-workbench.local:8080/api/devices | jq -r '.slots[0].url')
 
 # Flash firmware using build-generated flash_args (recommended)
 cd build && esptool.py --port "${SLOT_URL}?ign_set_control" \
@@ -99,7 +147,7 @@ After entering download mode via GPIO, flash with `--before=no_reset` (device is
 # Wait 5s for USB re-enumeration after GPIO reset
 sleep 5
 
-esptool.py --port "rfc2217://192.168.0.87:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=no_reset write_flash 0x0 firmware.bin
 ```
 
@@ -110,7 +158,7 @@ When firmware crashes on boot, the ESP32 enters a rapid panic→reboot cycle. Se
 **For native USB devices (ESP32-S3/C3):** `esptool --before=usb_reset` can connect even during a crash loop — it catches the device during the brief USB re-enumeration between reboots.
 
 ```bash
-esptool.py --port "rfc2217://192.168.0.87:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=usb_reset erase_flash
 ```
 
@@ -135,12 +183,12 @@ Empty or corrupt flash can cause USB connection cycling (`flapping` state — ad
 State flow: flapping → recovering → download_mode → (flash firmware) → idle
 ```
 
-After the portal reaches `download_mode`, upload build artifacts to the Pi and flash (use flash size matching the board — see `idf-flash` skill):
+After the portal reaches `download_mode`, upload build artifacts to the Pi and flash (use flash size matching the board — default 4MB):
 
 ```bash
 scp build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
-    build/ota_data_initial.bin build/wb-test-firmware.bin pi@192.168.0.87:/tmp/
-ssh pi@192.168.0.87 "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
+    build/ota_data_initial.bin build/wb-test-firmware.bin pi@esp32-workbench.local:/tmp/
+ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
   write_flash --flash_mode dio --flash_size 4MB \
   0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin \
   0xf000 /tmp/ota_data_initial.bin 0x20000 /tmp/wb-test-firmware.bin"
@@ -149,7 +197,7 @@ ssh pi@192.168.0.87 "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
 Then release GPIO and reboot into firmware:
 
 ```bash
-curl -X POST http://192.168.0.87:8080/api/serial/release \
+curl -X POST http://esp32-workbench.local:8080/api/serial/release \
   -H 'Content-Type: application/json' -d '{"slot": "SLOT1"}'
 ```
 
@@ -162,7 +210,7 @@ State flow: flapping → recovering → idle (if stable) or flapping (retry, up 
 After 2 failed attempts, the slot shows "needs manual intervention". Upload build artifacts and flash directly on the Pi:
 
 ```bash
-ssh pi@192.168.0.87 "python3 -m esptool --chip esp32s3 --port /dev/ttyACM0 \
+ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM0 \
   --before=usb_reset --after=hard_reset write_flash \
   --flash_mode dio --flash_size 4MB \
   0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin \
@@ -174,7 +222,7 @@ Once the device boots stable firmware, the flapping flag auto-clears on the next
 ### Manual recovery trigger
 
 ```bash
-curl -X POST http://192.168.0.87:8080/api/serial/recover \
+curl -X POST http://esp32-workbench.local:8080/api/serial/recover \
   -H 'Content-Type: application/json' -d '{"slot": "SLOT1"}'
 ```
 
@@ -215,7 +263,7 @@ Slots without `gpio_boot`/`gpio_en` use the no-GPIO backoff path.
 Sends DTR/RTS pulse, captures boot output (up to 5s), restarts proxy automatically.
 
 ```bash
-curl -X POST http://192.168.0.87:8080/api/serial/reset \
+curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1"}'
 ```
@@ -230,6 +278,19 @@ Response: `{"ok": true, "output": ["line1", "line2", ...]}`
 4. **Recover flapping device (GPIO):** wait for `download_mode` state → flash on Pi → `POST /api/serial/release`
 5. **Recover flapping device (no GPIO):** wait for backoff to stabilize, or `POST /api/serial/recover` to retry
 6. **Manual recovery trigger:** `POST /api/serial/recover {"slot": "SLOT1"}` — works anytime
+
+## Boot Mode
+
+To put ESP32 in bootloader mode manually:
+1. Hold **BOOT** button
+2. Press **RESET** button
+3. Release **RESET**, then **BOOT**
+
+## Monitor Shortcuts
+
+- `Ctrl+]` - Exit monitor
+- `Ctrl+T` `Ctrl+H` - Show help
+- `Ctrl+T` `Ctrl+R` - Reset target
 
 ## Troubleshooting
 

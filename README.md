@@ -67,7 +67,7 @@ Listens on **UDP port 5555** for debug log output from ESP32 devices. This is es
 
 The ESP32 firmware sends `ESP_LOG` output to the Pi's IP over UDP. Logs are buffered (last 2000 lines) and available via the HTTP API, filterable by source IP and timestamp.
 
-**ESP32 side** — point your UDP logging to `192.168.0.87:5555` (or whatever the Pi's IP is).
+**ESP32 side** — point your UDP logging to `esp32-workbench.local:5555` (or whatever the Pi's IP is).
 
 ### 5. OTA Firmware Repository
 
@@ -75,7 +75,7 @@ Serves firmware binaries over HTTP so ESP32 devices can perform OTA updates from
 
 Upload a `.bin` file to the Pi, then point the ESP32's OTA URL to:
 ```
-http://192.168.0.87:8080/firmware/<project-name>/<filename>.bin
+http://esp32-workbench.local:8080/firmware/<project-name>/<filename>.bin
 ```
 
 Firmware is stored in `/var/lib/rfc2217/firmware/` organized by project subdirectory.
@@ -132,7 +132,7 @@ A browser-based dashboard at **http://pi-ip:8080** showing:
        | eth0 (wired)
        v
   Raspberry Pi ---- wlan0 (WiFi test AP: 192.168.4.x)
-  192.168.0.87      hci0  (Bluetooth LE)
+  esp32-workbench.local      hci0  (Bluetooth LE)
        |             UDP :5555 (log receiver)
        | USB hub
        |
@@ -199,22 +199,22 @@ Restart after editing: `sudo systemctl restart rfc2217-portal`
 
 ```bash
 # esptool
-esptool --port "rfc2217://192.168.0.87:4001?ign_set_control" write_flash 0x0 firmware.bin
+esptool --port "rfc2217://esp32-workbench.local:4001?ign_set_control" write_flash 0x0 firmware.bin
 
 # ESP-IDF
-export ESPPORT="rfc2217://192.168.0.87:4001?ign_set_control"
+export ESPPORT="rfc2217://esp32-workbench.local:4001?ign_set_control"
 idf.py flash monitor
 
 # Python
 import serial
-ser = serial.serial_for_url("rfc2217://192.168.0.87:4001?ign_set_control", baudrate=115200)
+ser = serial.serial_for_url("rfc2217://esp32-workbench.local:4001?ign_set_control", baudrate=115200)
 ```
 
 ```ini
 # PlatformIO (platformio.ini)
 [env:esp32]
-upload_port = rfc2217://192.168.0.87:4001?ign_set_control
-monitor_port = rfc2217://192.168.0.87:4001?ign_set_control
+upload_port = rfc2217://esp32-workbench.local:4001?ign_set_control
+monitor_port = rfc2217://esp32-workbench.local:4001?ign_set_control
 ```
 
 ### pytest Driver
@@ -226,7 +226,7 @@ pip install -e Universal-ESP32-Workbench/pytest
 ```python
 from esp32_workbench_driver import ESP32WorkbenchDriver
 
-ut = ESP32WorkbenchDriver("http://192.168.0.87:8080")
+ut = ESP32WorkbenchDriver("http://esp32-workbench.local:8080")
 
 # Serial
 ut.serial_reset("SLOT2")
@@ -259,7 +259,7 @@ ut.udplog_clear()
 # OTA firmware
 ut.firmware_upload("my-project", "build/firmware.bin")
 files = ut.firmware_list()
-# ESP32 OTA URL: http://192.168.0.87:8080/firmware/my-project/firmware.bin
+# ESP32 OTA URL: http://esp32-workbench.local:8080/firmware/my-project/firmware.bin
 
 # BLE
 devices = ut.ble_scan(name_filter="iOS-Keyboard")
@@ -280,28 +280,28 @@ The workbench provides a complete end-to-end OTA workflow for ESP32 devices conn
 
 ```bash
 # 1. Upload firmware to the workbench's OTA repository
-curl -X POST http://192.168.0.87:8080/api/firmware/upload \
+curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
   -F "project=ios-keyboard" -F "file=@build/ios-keyboard.bin"
 
 # 2. Verify the firmware is downloadable
 #    (ESP32 will fetch from this URL during OTA)
 curl -o /dev/null -w "%{http_code}" \
-  http://192.168.0.87:8080/firmware/ios-keyboard/ios-keyboard.bin
+  http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
 
 # 3. Trigger OTA on the ESP32 via HTTP relay
 #    (the ESP32 must expose a /ota endpoint and be connected to the workbench's AP)
-curl -X POST http://192.168.0.87:8080/api/wifi/http \
+curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
   -H "Content-Type: application/json" \
   -d '{"method":"POST","url":"http://192.168.4.15/ota"}'
 
 # 4. Monitor progress via UDP logs
-curl http://192.168.0.87:8080/api/udplog?source=192.168.4.15
+curl http://esp32-workbench.local:8080/api/udplog?source=192.168.4.15
 ```
 
 The ESP32 device must:
 - Be connected to the workbench's WiFi AP (e.g. via `POST /api/enter-portal`)
 - Have an HTTP server with a `POST /ota` endpoint that triggers `esp_ota_ops`
-- Configure its OTA URL to `http://192.168.0.87:8080/firmware/<project>/<file>.bin`
+- Configure its OTA URL to `http://esp32-workbench.local:8080/firmware/<project>/<file>.bin`
 
 The workbench's HTTP relay (`POST /api/wifi/http`) bridges the gap between the LAN network and the WiFi AP network, allowing remote triggering of OTA from any client on the LAN.
 
@@ -309,40 +309,40 @@ The workbench's HTTP relay (`POST /api/wifi/http`) bridges the gap between the L
 
 ```bash
 # Serial reset
-curl -X POST http://192.168.0.87:8080/api/serial/reset \
+curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
   -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
 
 # Start WiFi AP
-curl -X POST http://192.168.0.87:8080/api/wifi/ap_start \
+curl -X POST http://esp32-workbench.local:8080/api/wifi/ap_start \
   -H "Content-Type: application/json" -d '{"ssid":"TestAP","password":"secret"}'
 
 # GPIO: hold boot pin LOW, pulse reset, release
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":18,"value":0}'
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":17,"value":0}'
 sleep 0.1
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":17,"value":"z"}'
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":18,"value":"z"}'
 
 # Get UDP logs
-curl http://192.168.0.87:8080/api/udplog?source=192.168.0.121&limit=50
+curl http://esp32-workbench.local:8080/api/udplog?source=192.168.0.121&limit=50
 
 # Upload firmware
-curl -X POST http://192.168.0.87:8080/api/firmware/upload \
+curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
   -F "project=ios-keyboard" -F "file=@build/ios-keyboard.bin"
 
 # BLE: scan, connect, write, disconnect
-curl -X POST http://192.168.0.87:8080/api/ble/scan \
+curl -X POST http://esp32-workbench.local:8080/api/ble/scan \
   -H "Content-Type: application/json" -d '{"timeout":5,"name_filter":"iOS-Keyboard"}'
-curl -X POST http://192.168.0.87:8080/api/ble/connect \
+curl -X POST http://esp32-workbench.local:8080/api/ble/connect \
   -H "Content-Type: application/json" -d '{"address":"1C:DB:D4:84:58:CE"}'
-curl -X POST http://192.168.0.87:8080/api/ble/write \
+curl -X POST http://esp32-workbench.local:8080/api/ble/write \
   -H "Content-Type: application/json" \
   -d '{"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","data":"0248656c6c6f"}'
-curl -X POST http://192.168.0.87:8080/api/ble/disconnect
+curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 ```
 
 ---
@@ -360,7 +360,7 @@ curl -X POST http://192.168.0.87:8080/api/ble/disconnect
 | ESP32-C3 stuck in download mode | DTR asserted on port open | Use `--after=watchdog-reset` with esptool, never `hard-reset` |
 | DUT not connecting to AP | Wrong WiFi credentials in DUT | Verify AP is running: `curl .../api/wifi/ap_status` |
 | BLE scan finds nothing | Bluetooth powered off | `sudo rfkill unblock bluetooth && sudo hciconfig hci0 up && sudo bluetoothctl power on` |
-| No UDP logs appearing | ESP32 not sending to correct IP/port | Verify firmware log host is `192.168.0.87:5555` |
+| No UDP logs appearing | ESP32 not sending to correct IP/port | Verify firmware log host is `esp32-workbench.local:5555` |
 | Firmware download returns 404 | Wrong path or not uploaded | Check `curl .../api/firmware/list` |
 | GPIO pin has no effect | Wrong BCM pin number or not wired | Verify wiring; only BCM pins in the allowlist work |
 

@@ -29,11 +29,11 @@ pio run -t clean           # Clean build
 For remote upload/monitor via Serial Pi (RFC2217), add to `platformio.ini`:
 
 ```ini
-upload_port = rfc2217://192.168.0.87:4001?ign_set_control
-monitor_port = rfc2217://192.168.0.87:4001?ign_set_control
+upload_port = rfc2217://esp32-workbench.local:4001?ign_set_control
+monitor_port = rfc2217://esp32-workbench.local:4001?ign_set_control
 ```
 
-Check http://192.168.0.87:8080 for device port assignments.
+Check http://esp32-workbench.local:8080 for device port assignments.
 
 ## Error Handling
 

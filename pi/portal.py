@@ -88,6 +88,11 @@ _udp_log: collections.deque = collections.deque(maxlen=UDP_LOG_MAX_LINES)
 _udp_thread: threading.Thread | None = None
 _udp_shutdown = threading.Event()
 
+# UDP discovery beacon — responds to DISCOVER probes so containers can find us
+BEACON_PORT = int(os.environ.get("BEACON_PORT", "5888"))
+_beacon_thread: threading.Thread | None = None
+_beacon_shutdown = threading.Event()
+
 # OTA firmware repository — serve .bin files for ESP32 OTA updates
 FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", "/var/lib/rfc2217/firmware")
 
@@ -239,6 +244,50 @@ def start_udp_log():
     _udp_shutdown.clear()
     _udp_thread = threading.Thread(target=_udp_log_thread, daemon=True, name="udp-log")
     _udp_thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Discovery beacon — respond to UDP DISCOVER probes
+# ---------------------------------------------------------------------------
+
+def _beacon_responder_thread():
+    """Background thread: listen for DISCOVER probes and respond with portal info."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", BEACON_PORT))
+    sock.settimeout(1.0)
+    print(f"[beacon] listening for DISCOVER probes on UDP :{BEACON_PORT}", flush=True)
+    while not _beacon_shutdown.is_set():
+        try:
+            data, addr = sock.recvfrom(1024)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        try:
+            text = data.decode("utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if text == "DISCOVER":
+            response = json.dumps({
+                "service": "esp32-workbench",
+                "hostname": hostname,
+                "ip": host_ip,
+                "port": PORT,
+            })
+            sock.sendto(response.encode(), addr)
+    sock.close()
+    print("[beacon] stopped", flush=True)
+
+
+def start_beacon():
+    """Start the discovery beacon responder thread."""
+    global _beacon_thread
+    _beacon_shutdown.clear()
+    _beacon_thread = threading.Thread(
+        target=_beacon_responder_thread, daemon=True, name="beacon"
+    )
+    _beacon_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -2522,8 +2571,9 @@ def main():
     # Scan for devices already plugged in at boot
     scan_existing_devices()
 
-    # Start UDP log receiver
+    # Start UDP log receiver and discovery beacon
     start_udp_log()
+    start_beacon()
 
     # Ensure firmware directory exists
     os.makedirs(FIRMWARE_DIR, exist_ok=True)
@@ -2541,6 +2591,7 @@ def main():
     except KeyboardInterrupt:
         print("[portal] shutting down", flush=True)
         _udp_shutdown.set()
+        _beacon_shutdown.set()
         wifi_controller.shutdown()
         if ble_controller:
             ble_controller.shutdown()

@@ -5,7 +5,21 @@ description: Serial monitor and UDP debug log retrieval from ESP32 devices. Cove
 
 # ESP32 Debug Logging
 
-Base URL: `http://192.168.0.87:8080`
+Base URL: `http://esp32-workbench.local:8080`
+
+## Step 0: Discover Workbench
+
+Before using any workbench API, ensure `esp32-workbench.local` resolves:
+
+```bash
+curl -s http://esp32-workbench.local:8080/api/info
+```
+
+If that fails, run the discovery script from the workbench repo:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
 
 Two logging methods are available. Choose based on your situation:
 
@@ -34,12 +48,12 @@ Reads serial output via RFC2217 proxy. Optionally waits for a regex pattern.
 
 ```bash
 # Wait up to 10s for a pattern match
-curl -X POST http://192.168.0.87:8080/api/serial/monitor \
+curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1", "pattern": "WiFi connected", "timeout": 10}'
 
 # Just capture output for 5s (no pattern)
-curl -X POST http://192.168.0.87:8080/api/serial/monitor \
+curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1", "timeout": 5}'
 ```
@@ -59,12 +73,12 @@ Response: `{"ok": true, "matched": true, "line": "WiFi connected to MyAP", "outp
 
 ```bash
 # Reset via JTAG slot
-curl -X POST http://192.168.0.87:8080/api/serial/reset \
+curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
   -H 'Content-Type: application/json' \
   -d '{"slot": "<JTAG-slot>"}'
 
 # Capture boot output from UART slot
-curl -X POST http://192.168.0.87:8080/api/serial/monitor \
+curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "<UART-slot>", "timeout": 10}'
 ```
@@ -75,16 +89,16 @@ ESP32 firmware sends debug logs as UDP datagrams to the workbench on port 5555. 
 
 ```bash
 # Get recent UDP logs (default limit: 200)
-curl -s http://192.168.0.87:8080/api/udplog | jq .
+curl -s http://esp32-workbench.local:8080/api/udplog | jq .
 
 # Filter by source device IP
-curl -s "http://192.168.0.87:8080/api/udplog?source=192.168.4.2" | jq .
+curl -s "http://esp32-workbench.local:8080/api/udplog?source=192.168.4.2" | jq .
 
 # Get logs since a timestamp, limited to 50 lines
-curl -s "http://192.168.0.87:8080/api/udplog?since=1700000000.0&limit=50" | jq .
+curl -s "http://esp32-workbench.local:8080/api/udplog?since=1700000000.0&limit=50" | jq .
 
 # Clear the buffer before starting a test
-curl -X DELETE http://192.168.0.87:8080/api/udplog
+curl -X DELETE http://esp32-workbench.local:8080/api/udplog
 ```
 
 Response format: `{"ok": true, "lines": [{"ts": 1700000001.23, "source": "192.168.4.2", "line": "OTA progress: 45%"}, ...]}`
@@ -107,7 +121,7 @@ The workbench listens on UDP port **5555**. ESP32 firmware sends plain text line
 
 ```c
 struct sockaddr_in workbench = { .sin_family = AF_INET, .sin_port = htons(5555) };
-inet_aton("192.168.0.87", &workbench.sin_addr);
+inet_aton("esp32-workbench.local", &workbench.sin_addr);
 sendto(sock, msg, strlen(msg), 0, (struct sockaddr *)&workbench, sizeof(workbench));
 ```
 
@@ -116,8 +130,8 @@ sendto(sock, msg, strlen(msg), 0, (struct sockaddr *)&workbench, sizeof(workbenc
 The activity log tracks workbench actions (resets, WiFi changes, firmware uploads) — not device output.
 
 ```bash
-curl -s http://192.168.0.87:8080/api/log | jq .
-curl -s "http://192.168.0.87:8080/api/log?since=2025-01-01T00:00:00Z" | jq .
+curl -s http://esp32-workbench.local:8080/api/log | jq .
+curl -s "http://esp32-workbench.local:8080/api/log?since=2025-01-01T00:00:00Z" | jq .
 ```
 
 ## Common Workflows

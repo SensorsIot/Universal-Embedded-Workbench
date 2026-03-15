@@ -5,11 +5,25 @@ description: Use when the user asks to "upload", "flash", "deploy", or "program"
 
 # PlatformIO Upload
 
+## Step 0: Discover Workbench
+
+Before using any workbench API, ensure `esp32-workbench.local` resolves:
+
+```bash
+curl -s http://esp32-workbench.local:8080/api/info
+```
+
+If that fails, run the discovery script from the workbench repo:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
+
 When uploading firmware to a device:
 
 1. First check for connected devices:
    - Local: `pio device list`
-   - Remote (RFC2217): Check web portal at http://192.168.0.87:8080
+   - Remote (RFC2217): Check web portal at http://esp32-workbench.local:8080
 2. If no device found, inform user and suggest checking USB connection or RFC2217 portal
 3. Run `pio run -t upload`
 4. If upload fails:
@@ -20,24 +34,24 @@ When uploading firmware to a device:
 
 ## RFC2217 Remote Upload (Preferred)
 
-For remote serial access via the Serial Pi (192.168.0.87), use RFC2217:
+For remote serial access via the Serial Pi (esp32-workbench.local), use RFC2217:
 
 ```ini
 # platformio.ini
-upload_port = rfc2217://192.168.0.87:4000?ign_set_control
-monitor_port = rfc2217://192.168.0.87:4000?ign_set_control
+upload_port = rfc2217://esp32-workbench.local:4000?ign_set_control
+monitor_port = rfc2217://esp32-workbench.local:4000?ign_set_control
 ```
 
 Or via command line:
 ```bash
-pio run -t upload --upload-port 'rfc2217://192.168.0.87:4000?ign_set_control'
-pio device monitor --port 'rfc2217://192.168.0.87:4000?ign_set_control'
+pio run -t upload --upload-port 'rfc2217://esp32-workbench.local:4000?ign_set_control'
+pio device monitor --port 'rfc2217://esp32-workbench.local:4000?ign_set_control'
 ```
 
 **Port Assignment:**
 - Port 4000: First RFC2217 device
 - Port 4001: Second RFC2217 device
-- Check http://192.168.0.87:8080 for current port assignments
+- Check http://esp32-workbench.local:8080 for current port assignments
 
 ## Local Upload Commands
 

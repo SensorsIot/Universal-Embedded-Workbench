@@ -1,11 +1,28 @@
 ---
 name: idf-flash
-description: Use when the user asks to "flash", "upload", "deploy", or "program" firmware to an ESP32 using ESP-IDF (not PlatformIO). Also use for "monitor" or "serial console" with ESP-IDF projects.
+description: >
+  Use when the user asks to build, flash, or monitor an ESP-IDF project on a
+  **locally connected** ESP32 (direct USB cable, not via the ESP32 Workbench).
+  Triggers on "flash", "upload", "build", "idf.py", "monitor", "serial console".
+  Do NOT use this skill when the user mentions a "slot", "workbench", or
+  "esp32-workbench.local" — use `esp32-workbench-serial-flashing` instead.
 ---
 
-# ESP-IDF Flash
+# ESP-IDF Build & Local Flash
 
-Flash firmware to ESP32 using ESP-IDF tools.
+Build ESP-IDF projects and flash to a locally connected ESP32 via USB.
+
+> **If the device is on the ESP32 Workbench** (user mentions a slot, workbench,
+> or remote Pi), use the `esp32-workbench-serial-flashing` skill instead.
+
+## Build Commands
+
+```bash
+source /opt/esp-idf/export.sh
+idf.py build                           # Build only
+idf.py flash                           # Build (if needed) and flash
+idf.py fullclean                       # Clean build directory
+```
 
 ## Flash Size and Partition Tables
 
@@ -14,8 +31,7 @@ Flash firmware to ESP32 using ESP-IDF tools.
 > different size when the actual flash is known (e.g. `esptool.py flash_id`
 > or from the datasheet).
 
-Partition tables must fit within the flash size. The test firmware provides
-two layouts:
+Partition tables must fit within the flash size. Two common layouts:
 
 | File | Flash size | App partition size | Use when |
 |------|-----------|-------------------|----------|
@@ -37,25 +53,13 @@ idf.py -p /dev/ttyUSB0 monitor         # Open serial monitor
 idf.py -p /dev/ttyUSB0 flash monitor   # Flash and monitor
 ```
 
-## Remote Flash (RFC2217)
+### esptool flags by device type
 
-For flashing via RFC2217 serial over network, use the `esp32-workbench-serial-flashing` skill which has detailed RFC2217 instructions, device discovery, and troubleshooting.
-
-Quick reference (check http://192.168.0.87:8080 for current slot-to-port assignments):
-```bash
-export ESPPORT='rfc2217://192.168.0.87:4001?ign_set_control'
-source /opt/esp-idf/export.sh
-idf.py flash monitor
-```
-
-## Build Commands
-
-```bash
-source /opt/esp-idf/export.sh
-idf.py build                           # Build only
-idf.py flash                           # Build (if needed) and flash
-idf.py fullclean                       # Clean build directory
-```
+| Device | `--before` | `--after` |
+|--------|-----------|----------|
+| ESP32-S3 (ttyACM, native USB) | `usb_reset` | `hard_reset` |
+| ESP32-C3 (ttyACM, native USB) | `usb_reset` | `watchdog_reset` |
+| ESP32 (ttyUSB, UART bridge) | `default_reset` | `hard_reset` |
 
 ## Boot Mode
 

@@ -5,7 +5,21 @@ description: GPIO pin control on the Raspberry Pi workbench for driving ESP32 bo
 
 # ESP32 GPIO Control
 
-Base URL: `http://192.168.0.87:8080`
+Base URL: `http://esp32-workbench.local:8080`
+
+## Step 0: Discover Workbench
+
+Before using any workbench API, ensure `esp32-workbench.local` resolves:
+
+```bash
+curl -s http://esp32-workbench.local:8080/api/info
+```
+
+If that fails, run the discovery script from the workbench repo:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
 
 ## Endpoints
 
@@ -33,17 +47,17 @@ Only use `0` (low) and `1` (high). Release = drive HIGH (`1`).
 
 ```bash
 # Drive GPIO18 LOW (hold BOOT button)
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' \
   -d '{"pin": 18, "value": 0}'
 
 # Drive GPIO18 HIGH (release)
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' \
   -d '{"pin": 18, "value": 1}'
 
 # Read all driven pin states
-curl http://192.168.0.87:8080/api/gpio/status
+curl http://esp32-workbench.local:8080/api/gpio/status
 ```
 
 ## Common Workflows
@@ -51,19 +65,19 @@ curl http://192.168.0.87:8080/api/gpio/status
 1. **Enter ESP32 download mode** (hold BOOT during reset):
    ```bash
    # 1. Hold BOOT (GPIO18) LOW
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 18, "value": 0}'
    sleep 1
    # 2. Pull EN (GPIO17) LOW — assert reset
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 17, "value": 0}'
    sleep 0.2
    # 3. Release EN HIGH — ESP32 exits reset, samples BOOT=LOW → download mode
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 17, "value": 1}'
    sleep 0.5
    # 4. Release BOOT HIGH
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 18, "value": 1}'
    ```
 
@@ -71,16 +85,16 @@ curl http://192.168.0.87:8080/api/gpio/status
    ```bash
    # Wait 5s for USB re-enumeration after GPIO reset
    sleep 5
-   esptool.py --port "rfc2217://192.168.0.87:<PORT>?ign_set_control" \
+   esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
      --chip esp32s3 --before=no_reset write_flash 0x0 firmware.bin
    ```
 
 3. **Normal reset** (without entering download mode):
    ```bash
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 17, "value": 0}'
    sleep 0.2
-   curl -X POST http://192.168.0.87:8080/api/gpio/set \
+   curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
      -H 'Content-Type: application/json' -d '{"pin": 17, "value": 1}'
    ```
 
@@ -95,25 +109,25 @@ Not all boards have EN/BOOT pins wired to Pi GPIOs. Run this probe once per boar
 
 ```bash
 # Step 1: Try GPIO-based download mode entry
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 18, "value": 0}'
 sleep 1
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 17, "value": 0}'
 sleep 0.2
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 17, "value": 1}'
 sleep 0.5
-curl -X POST http://192.168.0.87:8080/api/gpio/set \
+curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 18, "value": 1}'
 
 # Monitor for boot output
-curl -X POST http://192.168.0.87:8080/api/serial/monitor \
+curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "<slot>", "pattern": "boot:", "timeout": 3}'
 
 # Step 2: If GPIO had no effect, try USB DTR/RTS reset
-curl -X POST http://192.168.0.87:8080/api/serial/reset \
+curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
   -H 'Content-Type: application/json' -d '{"slot": "<slot>"}'
 ```
 

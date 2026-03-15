@@ -5,7 +5,21 @@ description: MQTT broker control on the Universal ESP32 Workbench. Start and sto
 
 # ESP32 MQTT Broker
 
-Base URL: `http://192.168.0.87:8080`
+Base URL: `http://esp32-workbench.local:8080`
+
+## Step 0: Discover Workbench
+
+Before using any workbench API, ensure `esp32-workbench.local` resolves:
+
+```bash
+curl -s http://esp32-workbench.local:8080/api/info
+```
+
+If that fails, run the discovery script from the workbench repo:
+
+```bash
+sudo python3 discover-workbench.py --hosts
+```
 
 The workbench can run an MQTT broker (mosquitto) for testing ESP32 devices that use MQTT for communication. The broker is accessible to devices connected to the workbench's WiFi AP.
 
@@ -21,20 +35,20 @@ The workbench can run an MQTT broker (mosquitto) for testing ESP32 devices that 
 
 ```bash
 # Start the MQTT broker
-curl -X POST http://192.168.0.87:8080/api/mqtt/start
+curl -X POST http://esp32-workbench.local:8080/api/mqtt/start
 
 # Check broker status
-curl http://192.168.0.87:8080/api/mqtt/status
+curl http://esp32-workbench.local:8080/api/mqtt/status
 
 # Stop the MQTT broker
-curl -X POST http://192.168.0.87:8080/api/mqtt/stop
+curl -X POST http://esp32-workbench.local:8080/api/mqtt/stop
 ```
 
 ## MQTT Broker Details
 
 | Property | Value |
 |----------|-------|
-| Broker IP | `192.168.0.87` (from LAN) or `192.168.4.1` (from workbench AP) |
+| Broker IP | `esp32-workbench.local` (from LAN) or `192.168.4.1` (from workbench AP) |
 | Default port | `1883` |
 | Authentication | None (open broker for testing) |
 
