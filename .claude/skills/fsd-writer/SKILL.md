@@ -1,11 +1,12 @@
 ---
-name: esp32-fsd-writer
+name: fsd-writer
 description: >
-  Generates or updates a Functional Specification Document (FSD) for ESP32
-  projects. Converts rough project descriptions into structured FSDs with
+  Generates or updates a Functional Specification Document (FSD), mainly
+  for ESP32 projects. Converts rough project descriptions into structured FSDs with
   requirements, test cases, and traceability. Supports initial generation
-  and incremental evolution. Triggers on "FSD", "write FSD", "new FSD",
-  "update FSD", "evolve FSD", "functional spec", "specification document".
+  and incremental evolution. Triggers on "FSD", "fsd", "write FSD",
+  "create FSD", "generate FSD", "new FSD", "update FSD", "evolve FSD",
+  "functional spec", "specification document".
 ---
 
 # FSD Writer Skill

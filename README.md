@@ -477,11 +477,15 @@ The workbench comes with Claude Code skills that let an AI agent operate the wor
 
 ### Installing Skills
 
-Clone this repo into your workspace — Claude Code automatically discovers skills from `.claude/skills/`:
+Clone this repo into your workspace and symlink its skills into your project's `.claude/skills/` directory so Claude Code discovers them automatically:
 
 ```bash
 git clone https://github.com/SensorsIot/Universal-ESP32-Workbench
+mkdir -p .claude
+ln -s "$(pwd)/Universal-ESP32-Workbench/.claude/skills" .claude/skills
 ```
+
+Restart Claude Code (or run `/clear`) for the skills to take effect.
 
 ### Available Skills
 
@@ -489,7 +493,7 @@ git clone https://github.com/SensorsIot/Universal-ESP32-Workbench
 |-------|-------------|---------|
 | `esp-idf-handling` | flash, build, idf.py, monitor, slot, OTA, esptool | Full ESP-IDF lifecycle — auto-detects local USB vs workbench |
 | `esp-pio-handling` | pio, platformio, pio run, pio upload | Full PlatformIO lifecycle — auto-detects local USB vs workbench |
-| `esp32-fsd-writer` | FSD, write FSD, functional spec | ESP32 FSD generation with 9 test spec libraries |
+| `fsd-writer` | FSD, write FSD, create FSD, functional spec | FSD generation, mainly for ESP32 projects, with 9 test spec libraries |
 | `workbench-integration` | integrate workbench, add testing | Adds workbench modules and testing chapters to project FSD |
 | `workbench-test-handling` | test progress, test session, operator | Test execution, progress tracking, operator interaction |
 | `workbench-wifi` | wifi, AP, station, scan, provision | WiFi AP/STA, HTTP relay, captive portal provisioning |
