@@ -107,6 +107,7 @@ Mode is switched via `POST /api/wifi/mode` or the web UI toggle.
 | esp32_workbench_driver.py | pytest/ | HTTP test driver for the WiFi instrument |
 | conftest.py | pytest/ | Pytest fixtures and CLI options |
 | test_instrument.py | pytest/ | WiFi workbench self-tests (WT-xxx) |
+| cw_beacon.py | /usr/local/bin/cw_beacon.py | CW beacon engine (GPCLK hardware clock + Morse keying) |
 
 ### 1.6 State Model
 
@@ -710,6 +711,11 @@ serial-interface mode.
 | **Test Progress** | | |
 | POST | /api/test/update | Push test session start, step, result, or end (FR-019) |
 | GET | /api/test/progress | Poll current test session state (FR-019) |
+| **CW Beacon** | | |
+| POST | /api/cw/start | Start Morse-keyed GPCLK carrier (FR-023) |
+| POST | /api/cw/stop | Stop CW beacon (FR-023) |
+| GET | /api/cw/status | Current beacon state (FR-023) |
+| GET | /api/cw/frequencies | List achievable GPCLK frequencies in a range (FR-023) |
 | **Composite** | | |
 | GET | /api/log | Activity log (timestamped entries, filterable with `?since=`) |
 | POST | /api/enter-portal | Ensure device is connected to workbench AP — provision via captive portal if needed |
@@ -1316,6 +1322,120 @@ wt.ble_disconnect()
 - Only one BLE connection at a time (Raspberry Pi hardware limitation
   with single radio)
 
+### FR-023 — CW Beacon (GPCLK Morse Transmitter)
+
+Generate a Morse-keyed RF carrier on the Pi's GPIO using the BCM2835 hardware
+clock generator.  Designed for direction finder testing on the 80m amateur band
+(3.5–4.0 MHz).  No additional hardware required — a wire antenna on the GPIO
+pin is sufficient for short-range radiation.
+
+#### 23.1 Principle
+
+The BCM2835 has hardware clock generators (GPCLK) that produce square waves
+from PLLD (500 MHz) divided by an integer.  Morse keying switches the GPIO
+pin function between ALT0 (clock output) and INPUT (high-Z) — the oscillator
+runs continuously, giving clean on/off keying with no phase glitches.
+
+#### 23.2 Available Pins
+
+| GPIO | Physical Pin | Clock |
+|------|:------------:|-------|
+| 5 | 29 | GPCLK1 |
+| 6 | 31 | GPCLK2 |
+
+**Note:** GPIO 5 and 6 are shared with the gpiod-based GPIO control (FR-018).
+Do not use both CW beacon and `POST /api/gpio/set` on the same pin
+simultaneously.
+
+#### 23.3 Frequency Selection
+
+Frequencies are determined by integer division of PLLD (500 MHz).  Only
+discrete frequencies are achievable — no fractional divider is used, so the
+output is jitter-free but the frequency resolution is ~25–30 kHz in the 80m
+band.
+
+Representative 80m band frequencies:
+
+| Divider | Frequency (MHz) |
+|---------|-----------------|
+| 125 | 4.000 |
+| 130 | 3.846 |
+| 135 | 3.704 |
+| 139 | 3.597 |
+| 140 | 3.571 |
+| 142 | 3.521 |
+
+Use `GET /api/cw/frequencies?low=&high=` to list all achievable frequencies
+in any range.
+
+#### 23.4 Morse Timing
+
+PARIS standard: 50 dit-lengths per word.  Dit duration = 1.2 / WPM seconds.
+
+| Element | Duration |
+|---------|----------|
+| Dit | 1 unit |
+| Dah | 3 units |
+| Inter-element gap | 1 unit |
+| Inter-character gap | 3 units |
+| Inter-word gap | 7 units |
+
+WPM is configurable from 1 to 60.
+
+#### 23.5 Endpoints
+
+**`POST /api/cw/start`** — Start CW beacon
+
+Request body:
+```json
+{"pin": 5, "freq": 3571000, "message": "VVV DE TEST", "wpm": 12, "repeat": true}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| freq | int | Yes | — | Target frequency in Hz (snapped to nearest integer divider) |
+| message | string | Yes | — | Morse message text |
+| wpm | int/float | No | 15 | Words per minute (PARIS), 1–60 |
+| pin | int | No | 5 | GPIO pin (5 = GPCLK1, 6 = GPCLK2) |
+| repeat | bool | No | true | Loop message continuously |
+
+Response:
+```json
+{"ok": true, "pin": 5, "freq_hz": 3571428.57, "divider": 140, "message": "VVV DE TEST", "wpm": 12, "repeat": true}
+```
+
+`freq_hz` is the actual output frequency (may differ from requested `freq`
+due to integer divider snapping).
+
+**`POST /api/cw/stop`** — Stop CW beacon.  No body required.
+
+**`GET /api/cw/status`** — Current beacon state (active, pin, freq_hz,
+divider, message, wpm, repeat).
+
+**`GET /api/cw/frequencies?low=&high=`** — List all achievable integer-divider
+frequencies in a range.  Defaults to 3.5–4.0 MHz.
+
+#### 23.6 Implementation
+
+- **`cw_beacon.py`**: Standalone module imported by portal.py
+- **Register access**: `/dev/mem` mmap to BCM2835 GPIO and clock manager
+  registers (requires root — portal runs as root via systemd)
+- **Keying method**: GPIO function select toggle (ALT0 ↔ INPUT) — clock
+  generator runs continuously, pin connects/disconnects
+- **Thread model**: Single daemon thread per beacon; starting a new beacon
+  stops the previous one
+- **Shutdown**: Clock generator stopped and pin released to INPUT on stop or
+  portal shutdown
+
+#### 23.7 Driver Methods
+
+```python
+wt.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
+wt.cw_status()     # {"active": True, "freq_hz": 3571428.57, ...}
+wt.cw_stop()
+wt.cw_frequencies(low=3_500_000, high=4_000_000)  # list of {divider, freq_hz}
+```
+
 ---
 
 ## 5. Web Portal
@@ -1609,6 +1729,11 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | WT-1205 | BLE disconnect | BLE Proxy | Yes |
 | WT-1206 | BLE write when not connected | BLE Proxy | No |
 | WT-1207 | BLE double connect rejected | BLE Proxy | Yes |
+| WT-1300 | CW beacon start and status | CW Beacon | No |
+| WT-1301 | CW beacon stop | CW Beacon | No |
+| WT-1302 | CW beacon frequency list | CW Beacon | No |
+| WT-1303 | CW beacon invalid pin rejected | CW Beacon | No |
+| WT-1304 | CW beacon replaces previous | CW Beacon | No |
 
 \* WT-503/504 require a running AP (wifi_network fixture) but not a physical DUT.
 
@@ -1633,6 +1758,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 6.2 | 2026-02-09 | Claude | GPIO control (FR-018): drive Pi GPIO pins from test scripts to control DUT hardware signals (e.g. hold GPIO 2 low during boot for captive portal trigger); pin allowlist, lazy gpiod init, release-to-input lifecycle; WT-800–806 test cases. Test progress tracking (FR-019): live test session updates pushed to web UI; WT-900–903 test cases |
 | 7.0 | 2026-02-25 | Claude | Three new services: UDP log receiver (FR-020) for ESP32 remote debug logs on port 5555; OTA firmware repository (FR-021) for serving .bin files to ESP32 OTA clients; BLE proxy (FR-022) for scan/connect/write to BLE peripherals via HTTP API using bleak. New deliverable: `ble_controller.py`. WT-1000–1207 test cases |
 | 7.1 | 2026-03-15 | Claude | Hostname renamed Serial1 → esp32-workbench; all references updated to esp32-workbench.local. UDP discovery beacon added to portal.py (port 5888) — containers can discover the workbench automatically. Skills consolidated from 14 → 9: merged flash skills into `esp-idf-handling` (auto-detects local vs workbench), PIO skills into `esp-pio-handling`, FSD + WiFi tests into `fsd-writer` with 9 test spec libraries (WiFi, captive portal, MQTT, BLE, OTA, USB HID, NVS, watchdog, logging). Removed `esp32-` prefix from workbench service skills. `fsd-writer` renamed from `esp32-fsd-writer` to be project-agnostic |
+| 7.2 | 2026-03-27 | Claude | CW beacon (FR-023): Morse-keyed RF carrier via BCM2835 GPCLK hardware on GPIO 5/6 for direction finder testing; PLLD 500 MHz integer divider for jitter-free 80m band output; PARIS-standard Morse timing 1–60 WPM; cw_beacon.py module; 4 API endpoints; driver methods cw_start/stop/status/frequencies; WT-1300–1304 test cases |
 
 ---
 
@@ -1947,6 +2073,13 @@ Add this to /etc/rfc2217/slots.json:
 - [ ] TASK-116: Update install.sh to install bleak dependency
 - [ ] TASK-117: Implement WT-1200–1207 BLE proxy test cases
 
+**CW Beacon (v7.2):**
+- [x] TASK-120: Implement `cw_beacon.py` (GPCLK register access, Morse engine, thread model)
+- [x] TASK-121: Add CW beacon API endpoints to portal.py (`/api/cw/start`, `stop`, `status`, `frequencies`)
+- [x] TASK-122: Add `cw_start/stop/status/frequencies()` methods to driver
+- [x] TASK-123: Deploy to Pi and verify API endpoints
+- [ ] TASK-124: Implement WT-1300–1304 CW beacon test cases
+
 ### C.2 Deliverables
 
 | Deliverable | Description |
@@ -1963,4 +2096,5 @@ Add this to /etc/rfc2217/slots.json:
 | `slots.json` | Slot configuration file |
 | `esp32_workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
-| `test_instrument.py` | Self-tests (WT-100 through WT-1207) |
+| `test_instrument.py` | Self-tests (WT-100 through WT-1304) |
+| `cw_beacon.py` | CW beacon engine — GPCLK hardware clock + Morse keying for DF testing |

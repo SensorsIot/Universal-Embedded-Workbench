@@ -398,3 +398,42 @@ class WiFiTesterDriver:
     def gpio_get(self) -> dict:
         """Get current GPIO pin states."""
         return self._api_get("/api/gpio/status")
+
+    # ── CW beacon ─────────────────────────────────────────────────────
+
+    def cw_start(self, freq: int, message: str, wpm: int = 15,
+                 pin: int = 5, repeat: bool = True) -> dict:
+        """Start CW beacon on GPCLK pin.
+
+        Args:
+            freq: Target frequency in Hz (snapped to nearest integer divider).
+            message: Morse message text.
+            wpm: Words per minute (PARIS standard), 1-60.
+            pin: GPIO pin with GPCLK (5 or 6).
+            repeat: Loop message continuously.
+
+        Returns:
+            dict with actual freq_hz, divider, and beacon parameters.
+        """
+        return self._api_post("/api/cw/start", {
+            "pin": pin, "freq": freq, "message": message,
+            "wpm": wpm, "repeat": repeat})
+
+    def cw_stop(self) -> dict:
+        """Stop CW beacon."""
+        return self._api_post("/api/cw/stop")
+
+    def cw_status(self) -> dict:
+        """Get current CW beacon state."""
+        return self._api_get("/api/cw/status")
+
+    def cw_frequencies(self, low: int = 3_500_000,
+                       high: int = 4_000_000) -> list:
+        """List achievable GPCLK frequencies in a range.
+
+        Returns:
+            list of {divider, freq_hz} dicts.
+        """
+        result = self._api_get(
+            f"/api/cw/frequencies?low={low}&high={high}")
+        return result.get("frequencies", [])

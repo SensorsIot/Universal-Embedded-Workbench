@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import wifi_controller
+from cw_beacon import CWBeacon
 try:
     import ble_controller
 except ImportError:
@@ -80,6 +81,9 @@ _gpio_chip = None       # gpiod.Chip, opened lazily
 _gpio_requests = {}     # pin -> gpiod.LineRequest
 _gpio_directions = {}   # pin -> "output" | "input"
 GPIO_ALLOWED = {5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}  # BCM GPIOs safe for DUT control
+
+# CW beacon (GPCLK hardware clock generator + Morse keying)
+_cw_beacon = CWBeacon()
 
 # UDP log receiver — ESP32 devices send debug logs over UDP to port 5555
 UDP_LOG_PORT = int(os.environ.get("UDP_LOG_PORT", "5555"))
@@ -1076,6 +1080,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_test_progress()
         elif path == "/api/gpio/status":
             self._handle_gpio_status()
+        elif path == "/api/cw/status":
+            self._handle_cw_status()
+        elif path == "/api/cw/frequencies":
+            qs = parse_qs(parsed.query)
+            self._handle_cw_frequencies(qs)
         elif path == "/api/udplog":
             qs = parse_qs(parsed.query)
             self._handle_get_udplog(qs)
@@ -1133,6 +1142,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_test_update()
         elif path == "/api/gpio/set":
             self._handle_gpio_set()
+        elif path == "/api/cw/start":
+            self._handle_cw_start()
+        elif path == "/api/cw/stop":
+            self._handle_cw_stop()
         elif path == "/api/firmware/upload":
             self._handle_firmware_upload()
         elif path == "/api/ble/scan":
@@ -2022,6 +2035,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         result = ble_controller.write(characteristic, data, response=response)
         self._send_json(result, 200 if result.get("ok") else 500)
 
+    # -- CW beacon handlers --
+
+    def _handle_cw_start(self):
+        body = self._read_json()
+        if not body:
+            self._send_json({"ok": False, "error": "empty body"}, 400)
+            return
+        pin = body.get("pin", 5)
+        freq = body.get("freq")
+        message = body.get("message", "")
+        wpm = body.get("wpm", 15)
+        repeat = body.get("repeat", True)
+        if freq is None:
+            self._send_json({"ok": False, "error": "missing freq"}, 400)
+            return
+        result = _cw_beacon.start(pin, freq, message, wpm, repeat)
+        if result.get("ok"):
+            log_activity(f"CW beacon started: {result['freq_hz']:.0f} Hz, "
+                         f"{wpm} WPM, pin {pin}", "ok")
+        self._send_json(result)
+
+    def _handle_cw_stop(self):
+        result = _cw_beacon.stop()
+        log_activity("CW beacon stopped", "info")
+        self._send_json(result)
+
+    def _handle_cw_status(self):
+        self._send_json({"ok": True, **_cw_beacon.status()})
+
+    def _handle_cw_frequencies(self, qs):
+        low = int(qs.get("low", [3_500_000])[0])
+        high = int(qs.get("high", [4_000_000])[0])
+        freqs = _cw_beacon.list_frequencies(low, high)
+        self._send_json({"ok": True, "frequencies": freqs})
+
     def _serve_ui(self):
         html = _UI_HTML
         body = html.encode()
@@ -2590,6 +2638,7 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("[portal] shutting down", flush=True)
+        _cw_beacon.shutdown()
         _udp_shutdown.set()
         _beacon_shutdown.set()
         wifi_controller.shutdown()
