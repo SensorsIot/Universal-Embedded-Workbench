@@ -437,3 +437,37 @@ class WiFiTesterDriver:
         result = self._api_get(
             f"/api/cw/frequencies?low={low}&high={high}")
         return result.get("frequencies", [])
+
+    # ── GDB debug ─────────────────────────────────────────────────────
+
+    def debug_start(self, slot: str, chip: str = None,
+                    probe: str = None) -> dict:
+        """Start OpenOCD debug session for a slot.
+
+        Args:
+            slot: Slot label (e.g. "SLOT1").
+            chip: Chip type (esp32c3, esp32s3, etc.). Optional if auto-detect.
+            probe: Probe label for ESP-Prog mode. Omit for USB JTAG.
+
+        Returns:
+            dict with gdb_port, telnet_port, chip, gdb_target.
+        """
+        body = {"slot": slot}
+        if chip:
+            body["chip"] = chip
+        if probe:
+            body["probe"] = probe
+        return self._api_post("/api/debug/start", body, timeout=15)
+
+    def debug_stop(self, slot: str) -> dict:
+        """Stop OpenOCD debug session for a slot."""
+        return self._api_post("/api/debug/stop", {"slot": slot})
+
+    def debug_status(self) -> dict:
+        """Get debug state for all slots."""
+        return self._api_get("/api/debug/status")
+
+    def debug_probes(self) -> list:
+        """List available debug probes (ESP-Prog)."""
+        result = self._api_get("/api/debug/probes")
+        return result.get("probes", [])

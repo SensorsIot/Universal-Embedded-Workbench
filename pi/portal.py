@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import wifi_controller
 from cw_beacon import CWBeacon
+import debug_controller
 try:
     import ble_controller
 except ImportError:
@@ -49,6 +50,7 @@ STATE_MONITORING = "monitoring"
 STATE_FLAPPING      = "flapping"
 STATE_RECOVERING    = "recovering"
 STATE_DOWNLOAD_MODE = "download_mode"
+STATE_DEBUGGING     = "debugging"
 
 # Module-level state
 slots: dict[str, dict] = {}
@@ -310,6 +312,8 @@ def load_config(path: str) -> dict[str, dict]:
                 "label": entry["label"],
                 "slot_key": key,
                 "tcp_port": entry["tcp_port"],
+                "gdb_port": entry.get("gdb_port"),
+                "openocd_telnet_port": entry.get("openocd_telnet_port"),
                 "gpio_boot": entry.get("gpio_boot"),
                 "gpio_en": entry.get("gpio_en"),
                 "present": False,
@@ -1080,6 +1084,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_test_progress()
         elif path == "/api/gpio/status":
             self._handle_gpio_status()
+        elif path == "/api/debug/status":
+            self._handle_debug_status()
+        elif path == "/api/debug/probes":
+            self._handle_debug_probes()
         elif path == "/api/cw/status":
             self._handle_cw_status()
         elif path == "/api/cw/frequencies":
@@ -1142,6 +1150,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_test_update()
         elif path == "/api/gpio/set":
             self._handle_gpio_set()
+        elif path == "/api/debug/start":
+            self._handle_debug_start()
+        elif path == "/api/debug/stop":
+            self._handle_debug_stop()
         elif path == "/api/cw/start":
             self._handle_cw_start()
         elif path == "/api/cw/stop":
@@ -1237,6 +1249,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True, "slot_key": slot_key, "seq": seq_counter,
                 "accepted": False, "flapping": True, "recovering": True,
+            })
+            return
+
+        # -- Early exit: if debugging, suppress proxy restarts --
+        # USB re-enumeration during JTAG reset is normal; OpenOCD handles it.
+        if slot["state"] == STATE_DEBUGGING:
+            print(
+                f"[portal] hotplug: {action} {label} suppressed (debugging)",
+                flush=True,
+            )
+            if devnode:
+                slot["devnode"] = devnode
+            self._send_json({
+                "ok": True, "slot_key": slot_key, "seq": seq_counter,
+                "accepted": False, "debugging": True,
             })
             return
 
@@ -2035,6 +2062,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         result = ble_controller.write(characteristic, data, response=response)
         self._send_json(result, 200 if result.get("ok") else 500)
 
+    # -- GDB debug handlers --
+
+    def _handle_debug_start(self):
+        body = self._read_json()
+        if not body:
+            self._send_json({"ok": False, "error": "empty body"}, 400)
+            return
+        slot_label = body.get("slot")
+        chip = body.get("chip")
+        probe = body.get("probe")
+        if not slot_label:
+            self._send_json({"ok": False, "error": "missing slot"}, 400)
+            return
+        slot = _find_slot_by_label(slot_label)
+        if not slot:
+            self._send_json({"ok": False, "error": "slot not found"}, 404)
+            return
+        gdb_port = slot.get("gdb_port")
+        telnet_port = slot.get("openocd_telnet_port")
+        if not gdb_port:
+            # Auto-assign based on slot index
+            idx = list(slots.values()).index(slot) if slot in slots.values() else 0
+            gdb_port = 3333 + idx
+            telnet_port = 4444 + idx
+        result = debug_controller.start(
+            slot_label, slot, gdb_port, telnet_port, chip, probe)
+        if result.get("ok"):
+            slot["state"] = STATE_DEBUGGING
+            log_activity(
+                f"Debug started: {slot_label} ({chip or 'auto'}) "
+                f"GDB:{gdb_port}", "ok")
+        self._send_json(result)
+
+    def _handle_debug_stop(self):
+        body = self._read_json()
+        if not body:
+            self._send_json({"ok": False, "error": "empty body"}, 400)
+            return
+        slot_label = body.get("slot", "")
+        result = debug_controller.stop(slot_label)
+        slot = _find_slot_by_label(slot_label)
+        if slot and slot["state"] == STATE_DEBUGGING:
+            slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+            log_activity(f"Debug stopped: {slot_label}", "info")
+        self._send_json(result)
+
+    def _handle_debug_status(self):
+        sessions = debug_controller.status()
+        # Merge with slot info for non-debugging slots
+        all_slots = {}
+        for s in slots.values():
+            label = s.get("label")
+            if not label:
+                continue
+            if label in sessions:
+                all_slots[label] = sessions[label]
+            else:
+                all_slots[label] = {"debugging": False}
+        self._send_json({"ok": True, "slots": all_slots})
+
+    def _handle_debug_probes(self):
+        probes = debug_controller.get_probes()
+        self._send_json({"ok": True, "probes": probes})
+
     # -- CW beacon handlers --
 
     def _handle_cw_start(self):
@@ -2619,6 +2710,14 @@ def main():
     # Scan for devices already plugged in at boot
     scan_existing_devices()
 
+    # Load debug probe configuration (if any)
+    try:
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+        debug_controller.load_probes(cfg.get("debug_probes", []))
+    except Exception:
+        pass
+
     # Start UDP log receiver and discovery beacon
     start_udp_log()
     start_beacon()
@@ -2638,6 +2737,7 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("[portal] shutting down", flush=True)
+        debug_controller.shutdown()
         _cw_beacon.shutdown()
         _udp_shutdown.set()
         _beacon_shutdown.set()

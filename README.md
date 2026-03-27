@@ -117,14 +117,48 @@ curl http://esp32-workbench.local:8080/api/cw/frequencies?low=3500000&high=40000
 curl -X POST http://esp32-workbench.local:8080/api/cw/stop
 ```
 
-### 8. Test Automation
+### 8. Remote GDB Debugging
+
+Connect GDB to ESP32 devices over the network. OpenOCD runs on the Pi with direct USB access; GDB connects from containers via TCP. No USB drivers or JTAG hardware needed on the developer's machine.
+
+**Three approaches:**
+
+| Approach | Chips | Extra Hardware | Serial During Debug |
+|----------|-------|:-:|:-:|
+| USB JTAG | C3, C6, H2, S3 (native USB) | None | Yes |
+| Dual-USB | S3 (two USB ports) | None | Yes + app USB |
+| ESP-Prog | All variants | ESP-Prog + cable | Yes |
+
+**Verified chips (USB JTAG):**
+
+| Chip | JTAG TAP ID | OpenOCD Config |
+|------|------------|----------------|
+| ESP32-C3 | `0x00005c25` | `board/esp32c3-builtin.cfg` |
+| ESP32-C6 | `0x0000dc25` | `board/esp32c6-builtin.cfg` |
+| ESP32-H2 | `0x00010c25` | `board/esp32h2-builtin.cfg` |
+| ESP32-S3 | `0x120034e5` | `board/esp32s3-builtin.cfg` |
+
+Serial and JTAG coexist on the same USB connection — no proxy stop needed. The JTAG interface (USB Interface 2) is unclaimed by the kernel, so OpenOCD accesses it directly via libusb.
+
+```bash
+# Start OpenOCD on Pi (example: C3)
+ssh pi@esp32-workbench.local "openocd-esp32 -s /usr/local/share/openocd-esp32/scripts \
+  -f board/esp32c3-builtin.cfg -c 'gdb port 3333' -c 'bindto 0.0.0.0'"
+
+# Connect GDB from container
+riscv32-esp-elf-gdb build/project.elf \
+  -ex "target extended-remote esp32-workbench.local:3333" \
+  -ex "monitor reset halt"
+```
+
+### 9. Test Automation
 
 Two additional services support automated test workflows:
 
 - **Test progress tracking** — push live test session updates (start, step, result, end) to the web portal. Operators see a real-time progress panel without needing a terminal.
 - **Human interaction requests** — block a test script until an operator confirms a physical action (cable swap, power cycle, antenna repositioning). The web portal shows a modal with the instruction and Done/Cancel buttons.
 
-### 8. Web Portal
+### 10. Web Portal
 
 A browser-based dashboard at **http://pi-ip:8080** showing:
 - Serial slot status (running/empty/flapping/recovering/download mode)
@@ -289,6 +323,11 @@ devices = ut.ble_scan(name_filter="iOS-Keyboard")
 ut.ble_connect(devices[0]["address"])
 ut.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
 ut.ble_disconnect()
+
+# GDB debug — start OpenOCD, connect GDB remotely
+info = ut.debug_start("SLOT1", chip="esp32c3")
+print(f"GDB: target extended-remote esp32-workbench.local:{info['gdb_port']}")
+ut.debug_stop("SLOT1")
 
 # CW beacon — direction finder test signal
 ut.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
@@ -459,6 +498,16 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 | GET | `/api/ble/status` | Connection state (`idle` / `scanning` / `connected`) |
 | POST | `/api/ble/write` | Write hex bytes `{"characteristic", "data", "response?"}` |
 
+### GDB Debug
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/debug/start` | Start OpenOCD `{"slot", "chip?", "probe?"}` |
+| POST | `/api/debug/stop` | Stop OpenOCD `{"slot"}` |
+| GET | `/api/debug/status` | Debug state for all slots |
+| GET | `/api/debug/group` | Slot groups and roles (dual-USB) |
+| GET | `/api/debug/probes` | Available debug probes (ESP-Prog) |
+
 ### CW Beacon
 
 | Method | Endpoint | Description |
@@ -490,6 +539,7 @@ pi/
   wifi_controller.py         WiFi AP/STA/scan/relay backend
   ble_controller.py          BLE scan/connect/write backend (bleak)
   cw_beacon.py               CW beacon (GPCLK Morse transmitter for DF testing)
+  debug_controller.py        GDB debug manager (OpenOCD lifecycle, probe allocation)
   plain_rfc2217_server.py    RFC2217 serial proxy with DTR/RTS passthrough
   install.sh                 One-command installer
   rfc2217-learn-slots        Slot discovery helper
@@ -539,6 +589,7 @@ Restart Claude Code (or run `/clear`) for the skills to take effect.
 | `workbench-mqtt` | MQTT, broker, publish, subscribe | MQTT broker control |
 | `workbench-logging` | serial monitor, log, UDP log | Serial monitor, UDP debug logs |
 | `cw-beacon` | CW beacon, Morse, direction finder, 80m, GPCLK | GPCLK Morse transmitter for DF testing |
+| `workbench-debug` | GDB, JTAG, debug, OpenOCD, breakpoint, ESP-Prog | Remote GDB debugging via USB JTAG or ESP-Prog |
 
 ---
 
