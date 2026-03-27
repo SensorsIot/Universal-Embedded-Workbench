@@ -1475,26 +1475,70 @@ the client side.
 | Chip | USB JTAG | Condition |
 |------|:--------:|-----------|
 | ESP32-C3 | Yes | Board must use native USB (not CP2102/CH340 bridge) |
-| ESP32-S3 | Yes | Board must use native USB (not UART bridge) |
+| ESP32-S3 | Yes | Board must use native USB (not CH340 hub bridge) |
 | ESP32 (classic) | No | No USB JTAG — use FR-026 (ESP-Prog) |
 | ESP32-S2 | No | USB-OTG only, no built-in JTAG controller |
 
-#### 24.3 Software Dependencies
+**Note:** Some S3 boards (e.g. boards with built-in CH340 USB hub) route
+USB through a UART bridge chip instead of the S3's native USB-Serial/JTAG
+controller.  These boards appear as VID `1a86` (QinHeng) rather than
+`303a` (Espressif) and do NOT support USB JTAG.  Only boards where the
+S3's native USB D+/D- lines connect directly to the USB connector expose
+the JTAG interface.
+
+#### 24.3 Chip Auto-Detection
+
+All chips with native USB-Serial/JTAG share the same USB PID (`303a:1001`),
+so the chip type **cannot** be determined from USB enumeration alone.
+However, the JTAG TAP ID read during OpenOCD's scan chain interrogation
+uniquely identifies the chip architecture:
+
+| JTAG TAP ID | Manufacturer | Architecture | Chip |
+|-------------|-------------|-------------|------|
+| `0x00005c25` | Espressif (`0x612`) | RISC-V single-core | ESP32-C3, C6, H2 |
+| `0x120034e5` | Tensilica (`0x272`) | Xtensa dual-core | ESP32-S3 |
+
+**Auto-detection strategy:** The portal can attempt OpenOCD with a candidate
+config.  If the TAP ID mismatches, try the other config.  Alternatively,
+accept `chip` as an optional parameter — if omitted, probe both configs.
+
+#### 24.4 USB Interface Layout
+
+The native USB-Serial/JTAG controller exposes three USB interfaces:
+
+| Interface | Class | Linux Driver | Purpose |
+|-----------|-------|-------------|---------|
+| 0 | CDC-ACM | `cdc_acm` → `/dev/ttyACM*` | Serial console (RFC2217 proxy) |
+| 1 | CDC Data | `cdc_acm` | Serial data channel |
+| 2 | Vendor Specific | **none** (unclaimed) | JTAG (OpenOCD via libusb) |
+
+**Key finding:** Interface 2 (JTAG) is **not claimed** by any kernel driver.
+OpenOCD accesses it directly via libusb without needing `unbind` or
+`detach_kernel_driver`.  This means serial (RFC2217) and JTAG (OpenOCD) can
+coexist on the same physical USB connection without any driver manipulation.
+
+This differs from the ESP-Prog (FR-026) where the `ftdi_sio` kernel driver
+claims both FTDI channels and channel A must be explicitly unbound.
+
+#### 24.5 Software Dependencies
 
 **On the Pi:**
-- `esp-openocd` — Espressif's fork (not upstream OpenOCD).  Required for
-  ESP32 flash drivers, reset sequences, and USB JTAG support.  Must be the
-  **aarch64** build matching the Pi Zero 2 W's ARM Cortex-A53.
-- Installation: download from Espressif's GitHub releases as part of the
-  ESP-IDF tools package, or extract the standalone `openocd-esp32` binary.
+- `esp-openocd` v0.12.0+ — Espressif's fork (not upstream OpenOCD).  Required
+  for ESP32 flash drivers, reset sequences, and USB JTAG support.
+- **Prebuilt binary:** download `openocd-esp32-linux-arm64-*.tar.gz` from
+  [espressif/openocd-esp32 releases](https://github.com/espressif/openocd-esp32/releases).
+  The `install.sh` script handles this automatically.
+- Installation path: `/usr/local/bin/openocd-esp32`
+- Scripts path: `/usr/local/share/openocd-esp32/scripts/`
 - Target configs: `board/esp32c3-builtin.cfg`, `board/esp32s3-builtin.cfg`
+- **Must pass** `-s /usr/local/share/openocd-esp32/scripts` to OpenOCD
 
 **On the remote container (developer side):**
 - `riscv32-esp-elf-gdb` (for C3) or `xtensa-esp32s3-elf-gdb` (for S3)
   — included in ESP-IDF toolchain
 - No special drivers or USB access needed — pure TCP connection
 
-#### 24.4 Configuration
+#### 24.6 Configuration
 
 | Constant | Default | Env Override | Description |
 |----------|---------|-------------|-------------|
@@ -1517,7 +1561,7 @@ the client side.
 }
 ```
 
-#### 24.5 State Model Extension
+#### 24.7 State Model Extension
 
 New slot state `Debugging` added to the Serial Service state machine:
 
@@ -1537,7 +1581,7 @@ State transitions:
 `serial/monitor`, and `enter-portal` requests.  Flashing via esptool is
 blocked — the chip's CPU is under OpenOCD control.
 
-#### 24.6 Endpoints
+#### 24.8 Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1599,17 +1643,19 @@ blocked — the chip's CPU is under OpenOCD control.
 | OpenOCD failed to start | 500 | `{"ok": false, "error": "openocd failed: ..."}` |
 | Unsupported chip | 400 | `{"ok": false, "error": "chip 'esp32' has no USB JTAG — use ESP-Prog"}` |
 
-#### 24.7 OpenOCD Lifecycle
+#### 24.9 OpenOCD Lifecycle
 
 **Start sequence:**
 1. Validate slot is `Idle` and device is present
-2. Stop RFC2217 proxy for the slot
+2. RFC2217 proxy may remain running (serial and JTAG use separate USB
+   interfaces — see §24.4).  Stopping the proxy is optional and depends
+   on whether exclusive serial access is needed during debug.
 3. Launch `openocd-esp32` as subprocess:
    ```
-   openocd-esp32 \
-     -f board/esp32c3-builtin.cfg \
-     -c "gdb_port {gdb_port}" \
-     -c "telnet_port {telnet_port}" \
+   openocd-esp32 -s /usr/local/share/openocd-esp32/scripts \
+     -f board/{chip}-builtin.cfg \
+     -c "gdb port {gdb_port}" \
+     -c "telnet port {telnet_port}" \
      -c "bindto 0.0.0.0"
    ```
 4. Wait up to 5s for OpenOCD to bind (poll TCP port)
@@ -1625,15 +1671,18 @@ blocked — the chip's CPU is under OpenOCD control.
 resets) are logged but do NOT trigger proxy restarts while in `Debugging`
 state.  OpenOCD manages USB reconnection internally.
 
-#### 24.8 Serial Console During Debug
+#### 24.10 Serial Console During Debug
 
-**Limitation:** With single-port USB JTAG, the RFC2217 proxy must be stopped
-while OpenOCD is running.  OpenOCD can provide a "virtual serial" via its
-TCL interface, but this is not a full serial console.
+**Verified:** Serial console and JTAG debugging coexist on the same physical
+USB connection.  The native USB-Serial/JTAG controller exposes serial
+(Interface 0, `cdc_acm`) and JTAG (Interface 2, unclaimed) as separate
+USB interfaces.  The RFC2217 proxy can remain running while OpenOCD uses
+the JTAG interface — developers can see `printf` output alongside GDB.
 
-For simultaneous serial + debug, use FR-025 (Dual-USB) or FR-026 (ESP-Prog).
+This eliminates the originally anticipated need to stop the serial proxy
+during debug sessions for native USB-Serial/JTAG devices.
 
-#### 24.9 Driver Methods
+#### 24.11 Driver Methods
 
 ```python
 # Start debug session
@@ -1648,7 +1697,7 @@ status = wt.debug_status()
 wt.debug_stop("SLOT1")
 ```
 
-#### 24.10 IDE Integration (Client Side)
+#### 24.12 IDE Integration (Client Side)
 
 **VS Code (launch.json):**
 ```json
@@ -1990,21 +2039,29 @@ slot.  The portal tracks which slot's DUT is connected to the probe.
 
 **Start sequence:**
 1. Validate probe is available and slot has a device
-2. Launch OpenOCD:
+2. **Unbind channel A from `ftdi_sio`** — the Linux kernel claims both
+   FT2232H channels as serial ports.  Channel A (JTAG) must be released
+   to libusb before OpenOCD can use it:
+   ```bash
+   echo '{bus}-{port}:1.0' > /sys/bus/usb/drivers/ftdi_sio/unbind
    ```
-   openocd-esp32 \
+   Channel B (UART, `/dev/ttyUSB1`) remains bound for optional serial use.
+3. Launch OpenOCD:
+   ```
+   openocd-esp32 -s /usr/local/share/openocd-esp32/scripts \
      -f interface/ftdi/esp32_devkitj_v1.cfg \
      -f target/esp32.cfg \
-     -c "gdb_port 3333" \
-     -c "telnet_port 4444" \
+     -c "gdb port 3333" \
+     -c "telnet port 4444" \
      -c "bindto 0.0.0.0"
    ```
-3. Wait up to 5s for OpenOCD to bind
-4. Mark probe as in-use, record slot assignment
+4. Wait up to 5s for OpenOCD to bind
+5. Mark probe as in-use, record slot assignment
 
 **Stop sequence:**
 1. SIGTERM → OpenOCD
-2. Release probe, clear slot assignment
+2. Rebind channel A to `ftdi_sio` (restore `/dev/ttyUSB0`)
+3. Release probe, clear slot assignment
 
 **Key difference from FR-024:** The RFC2217 proxy is NOT stopped.  The probe
 uses the JTAG pins, not the USB serial connection.  Serial console remains
