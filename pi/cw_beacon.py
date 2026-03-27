@@ -14,8 +14,17 @@ import struct
 import threading
 import time
 
-# BCM2835 (Pi Zero W) peripheral base
-PERI_BASE = 0x20000000
+def _detect_peri_base():
+    """Auto-detect BCM peripheral base from device tree."""
+    try:
+        with open("/proc/device-tree/soc/ranges", "rb") as f:
+            data = f.read(12)
+            return struct.unpack(">I", data[4:8])[0]
+    except (OSError, struct.error):
+        return 0x20000000  # fallback: BCM2835 (Pi Zero W v1)
+
+
+PERI_BASE = _detect_peri_base()
 GPIO_BASE = PERI_BASE + 0x200000
 CLK_BASE = PERI_BASE + 0x101000
 
