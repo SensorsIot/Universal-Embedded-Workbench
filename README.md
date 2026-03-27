@@ -95,7 +95,29 @@ sudo hciconfig hci0 up
 sudo bluetoothctl power on
 ```
 
-### 7. Test Automation
+### 7. CW Beacon (Morse Transmitter)
+
+Generates a **Morse-keyed RF carrier** on GPIO 5 (pin 29) or GPIO 6 (pin 31) using the BCM2835 hardware clock generator (GPCLK). Designed for **direction finder testing** on the 80m amateur band (3.5–4.0 MHz). No additional hardware needed — just a wire antenna on the GPIO pin.
+
+- Frequency source: PLLD (500 MHz) with integer divider — jitter-free output
+- Resolution: ~25–30 kHz steps in the 80m band (e.g. 3.571, 3.597, 3.846 MHz)
+- Morse timing: PARIS standard, configurable 1–60 WPM
+- Keying: GPIO function-select toggle (ALT0 ↔ INPUT) — no phase glitches
+
+```bash
+# Start beacon at ~3.571 MHz, 12 WPM
+curl -X POST http://esp32-workbench.local:8080/api/cw/start \
+  -H "Content-Type: application/json" \
+  -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
+
+# List available frequencies
+curl http://esp32-workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
+
+# Stop
+curl -X POST http://esp32-workbench.local:8080/api/cw/stop
+```
+
+### 8. Test Automation
 
 Two additional services support automated test workflows:
 
@@ -151,6 +173,7 @@ eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicat
 | 8080 | TCP/HTTP | Clients → Pi | Web portal, REST API, firmware downloads |
 | 4001+ | TCP/RFC2217 | Clients → Pi | Serial connections (one per USB slot) |
 | 5555 | UDP | ESP32 → Pi | Debug log receiver |
+| 5888 | UDP | Clients ↔ Pi | Discovery beacon |
 
 ---
 
@@ -266,6 +289,11 @@ devices = ut.ble_scan(name_filter="iOS-Keyboard")
 ut.ble_connect(devices[0]["address"])
 ut.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
 ut.ble_disconnect()
+
+# CW beacon — direction finder test signal
+ut.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
+status = ut.cw_status()   # check if active
+ut.cw_stop()
 
 # Test progress
 ut.test_start(spec="Firmware v2.1", phase="Integration", total=10)
@@ -431,6 +459,15 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 | GET | `/api/ble/status` | Connection state (`idle` / `scanning` / `connected`) |
 | POST | `/api/ble/write` | Write hex bytes `{"characteristic", "data", "response?"}` |
 
+### CW Beacon
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/cw/start` | Start Morse beacon `{"freq", "message", "wpm?", "pin?", "repeat?"}` |
+| POST | `/api/cw/stop` | Stop beacon |
+| GET | `/api/cw/status` | Current beacon state |
+| GET | `/api/cw/frequencies` | List achievable frequencies `?low=&high=` |
+
 ### Test / Other
 
 | Method | Endpoint | Description |
@@ -452,6 +489,7 @@ pi/
   portal.py                  Main HTTP server, proxy supervisor, all API endpoints
   wifi_controller.py         WiFi AP/STA/scan/relay backend
   ble_controller.py          BLE scan/connect/write backend (bleak)
+  cw_beacon.py               CW beacon (GPCLK Morse transmitter for DF testing)
   plain_rfc2217_server.py    RFC2217 serial proxy with DTR/RTS passthrough
   install.sh                 One-command installer
   rfc2217-learn-slots        Slot discovery helper
@@ -500,6 +538,7 @@ Restart Claude Code (or run `/clear`) for the skills to take effect.
 | `workbench-ble` | BLE, bluetooth, GATT, NUS | BLE scan, connect, GATT write |
 | `workbench-mqtt` | MQTT, broker, publish, subscribe | MQTT broker control |
 | `workbench-logging` | serial monitor, log, UDP log | Serial monitor, UDP debug logs |
+| `cw-beacon` | CW beacon, Morse, direction finder, 80m, GPCLK | GPCLK Morse transmitter for DF testing |
 
 ---
 
