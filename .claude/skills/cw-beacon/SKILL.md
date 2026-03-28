@@ -110,8 +110,8 @@ List all achievable integer-divider frequencies in a range:
 ## Driver Methods
 
 ```python
-from esp32_workbench_driver import ESP32WorkbenchDriver
-wt = ESP32WorkbenchDriver("http://192.168.0.87:8080")
+from workbench_driver import WorkbenchDriver
+wt = WorkbenchDriver("http://192.168.0.87:8080")
 
 # List available frequencies in 80m band
 freqs = wt.cw_frequencies(low=3_500_000, high=4_000_000)
@@ -165,7 +165,7 @@ Resolution is ~25-30 kHz — tune your receiver to match the actual output frequ
 ## Typical Usage: DF Test Beacon
 
 ```python
-wt = ESP32WorkbenchDriver("http://192.168.0.87:8080")
+wt = WorkbenchDriver("http://192.168.0.87:8080")
 
 # Pick a frequency your DF receiver can tune to
 result = wt.cw_start(

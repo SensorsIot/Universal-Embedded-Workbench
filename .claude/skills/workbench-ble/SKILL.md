@@ -5,14 +5,14 @@ description: Use this skill whenever the user needs to interact with BLE periphe
 
 # ESP32 Bluetooth LE Proxy
 
-Base URL: `http://esp32-workbench.local:8080`
+Base URL: `http://workbench.local:8080`
 
 ## Step 0: Discover Workbench
 
-Before using any workbench API, ensure `esp32-workbench.local` resolves:
+Before using any workbench API, ensure `workbench.local` resolves:
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/info
+curl -s http://workbench.local:8080/api/info
 ```
 
 If that fails, run the discovery script from the workbench repo:
@@ -37,30 +37,30 @@ One BLE connection at a time.
 
 ```bash
 # Scan for BLE devices (5s timeout)
-curl -X POST http://esp32-workbench.local:8080/api/ble/scan \
+curl -X POST http://workbench.local:8080/api/ble/scan \
   -H 'Content-Type: application/json' \
   -d '{"timeout": 5}'
 
 # Scan with name filter
-curl -X POST http://esp32-workbench.local:8080/api/ble/scan \
+curl -X POST http://workbench.local:8080/api/ble/scan \
   -H 'Content-Type: application/json' \
   -d '{"timeout": 5, "name_filter": "iOS-Keyboard"}'
 
 # Connect by MAC address
-curl -X POST http://esp32-workbench.local:8080/api/ble/connect \
+curl -X POST http://workbench.local:8080/api/ble/connect \
   -H 'Content-Type: application/json' \
   -d '{"address": "AA:BB:CC:DD:EE:FF"}'
 
 # Write hex data to a GATT characteristic
-curl -X POST http://esp32-workbench.local:8080/api/ble/write \
+curl -X POST http://workbench.local:8080/api/ble/write \
   -H 'Content-Type: application/json' \
   -d '{"characteristic": "6e400002-b5a3-f393-e0a9-e50e24dcca9e", "data": "48656c6c6f", "response": true}'
 
 # Check connection status
-curl http://esp32-workbench.local:8080/api/ble/status
+curl http://workbench.local:8080/api/ble/status
 
 # Disconnect
-curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
+curl -X POST http://workbench.local:8080/api/ble/disconnect
 ```
 
 ## Nordic UART Service (NUS) UUIDs

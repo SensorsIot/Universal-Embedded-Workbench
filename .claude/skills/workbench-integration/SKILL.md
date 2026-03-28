@@ -112,7 +112,7 @@ OTA_TRIGGER       → ble / http / both
 Record project-specific values:
 - WiFi AP SSID for captive portal (e.g. `"KB-Setup"`)
 - BLE device name (e.g. `"iOS-KB"`)
-- OTA URL (e.g. `"http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin"`)
+- OTA URL (e.g. `"http://workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin"`)
 - NVS namespace
 - Any project-specific command opcodes
 
@@ -212,7 +212,7 @@ Ensure the canonical init order:
 1. NVS init (with erase-on-corrupt fallback)
 2. Boot count increment
 3. `esp_netif_init()` + `esp_event_loop_create_default()`
-4. `udp_log_init("esp32-workbench.local", 5555)`
+4. `udp_log_init("workbench.local", 5555)`
 5. Register IP event handler for HTTP server
 6. `wifi_prov_init()`
 7. `ble_nus_init(cmd_handler_on_rx)`

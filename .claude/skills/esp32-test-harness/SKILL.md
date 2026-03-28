@@ -9,7 +9,7 @@ How to manipulate the ESP32-C3 DUT during automated tests using the Serial Porta
 
 **Golden rule:** The Serial Portal and MQTT broker are always-on infrastructure. Tests NEVER start, stop, or restart them.
 
-**Driver rule:** Always use `ESP32WorkbenchDriver` from Python — never raw curl. This gives typed responses, proper error handling, and access to the slot `state` field.
+**Driver rule:** Always use `WorkbenchDriver` from Python — never raw curl. This gives typed responses, proper error handling, and access to the slot `state` field.
 
 ---
 
@@ -124,22 +124,22 @@ All functional tests (Phase 1) run entirely on the artificial network — the Wi
 
 ## 0. WiFi Tester Driver Setup
 
-All test operations use `ESP32WorkbenchDriver`. Set `PYTHONPATH` to import it:
+All test operations use `WorkbenchDriver`. Set `PYTHONPATH` to import it:
 
 ```python
 import sys
 sys.path.insert(0, "/tmp/Universal-ESP32-Tester/pytest")
-from esp32_workbench_driver import ESP32WorkbenchDriver
+from workbench_driver import WorkbenchDriver
 
-wt = ESP32WorkbenchDriver("http://192.168.0.87:8080")
+wt = WorkbenchDriver("http://192.168.0.87:8080")
 ```
 
 Or from bash one-liners:
 
 ```bash
 PYTHONPATH=/tmp/Universal-ESP32-Tester/pytest python3 -c "
-from esp32_workbench_driver import ESP32WorkbenchDriver
-wt = ESP32WorkbenchDriver('http://192.168.0.87:8080')
+from workbench_driver import WorkbenchDriver
+wt = WorkbenchDriver('http://192.168.0.87:8080')
 # ... operations ...
 "
 ```

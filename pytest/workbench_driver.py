@@ -64,8 +64,8 @@ class CommandTimeout(WorkbenchError):
 # ── Driver ───────────────────────────────────────────────────────────
 
 
-class ESP32WorkbenchDriver:
-    """HTTP driver for the ESP32 Embedded Workbench."""
+class WorkbenchDriver:
+    """HTTP driver for the Embedded Workbench."""
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")

@@ -9,7 +9,7 @@ Remote GDB debugging of ESP32 devices through the workbench Pi. OpenOCD runs on 
 
 **Architecture:**
 ```
-[Container]              [Pi (esp32-workbench)]           [ESP32]
+[Container]              [Pi (workbench)]           [ESP32]
   GDB ──── TCP :3333 ────── OpenOCD ──── USB JTAG ──────── CPU
                              (or)
                            OpenOCD ──── ESP-Prog ── JTAG pins
@@ -39,17 +39,17 @@ OpenOCD starts **automatically** when a device is plugged in or at boot. No API 
 
 **Check debug status:**
 ```bash
-curl http://esp32-workbench.local:8080/api/devices
+curl http://workbench.local:8080/api/devices
 # Look for: "debugging": true, "debug_chip": "esp32s3", "debug_gdb_port": 3335
 ```
 
 **Manual override (optional -- only needed to force-stop or force-start):**
 ```bash
 # Force stop (won't auto-restart until next hotplug)
-curl -X POST http://esp32-workbench.local:8080/api/debug/stop -d '{}'
+curl -X POST http://workbench.local:8080/api/debug/stop -d '{}'
 
 # Force start with specific chip
-curl -X POST http://esp32-workbench.local:8080/api/debug/start \
+curl -X POST http://workbench.local:8080/api/debug/start \
   -d '{"chip": "esp32c3"}'
 ```
 
@@ -81,7 +81,7 @@ echo "reset halt" | nc 192.168.0.87 4446
 **Via workbench API (automatic):**
 ```bash
 # Uses JTAG reset when debug session is active, DTR/RTS otherwise
-curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
+curl -X POST http://workbench.local:8080/api/serial/reset \
   -H "Content-Type: application/json" -d '{"slot": "slot-1"}'
 ```
 

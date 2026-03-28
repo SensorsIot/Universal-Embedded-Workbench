@@ -5,14 +5,14 @@ description: Use this skill whenever running automated tests that need progress 
 
 # ESP32 Test Automation
 
-Base URL: `http://esp32-workbench.local:8080`
+Base URL: `http://workbench.local:8080`
 
 ## Step 0: Discover Workbench
 
-Before using any workbench API, ensure `esp32-workbench.local` resolves:
+Before using any workbench API, ensure `workbench.local` resolves:
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/info
+curl -s http://workbench.local:8080/api/info
 ```
 
 If that fails, run the discovery script from the workbench repo:
@@ -36,27 +36,27 @@ Test scripts can push live progress updates to the workbench web UI so operators
 
 ```bash
 # 1. Start a test session
-curl -X POST http://esp32-workbench.local:8080/api/test/update \
+curl -X POST http://workbench.local:8080/api/test/update \
   -H 'Content-Type: application/json' \
   -d '{"spec": "iOS-Keyboard v1.0", "phase": "Phase 1", "total": 8}'
 
 # 2. Update current test step
-curl -X POST http://esp32-workbench.local:8080/api/test/update \
+curl -X POST http://workbench.local:8080/api/test/update \
   -H 'Content-Type: application/json' \
   -d '{"current": {"id": "TC-001", "name": "WiFi Provisioning", "step": "Joining AP...", "manual": false}}'
 
 # 3. Record a result
-curl -X POST http://esp32-workbench.local:8080/api/test/update \
+curl -X POST http://workbench.local:8080/api/test/update \
   -H 'Content-Type: application/json' \
   -d '{"result": {"id": "TC-001", "name": "WiFi Provisioning", "result": "PASS"}}'
 
 # 4. End the session
-curl -X POST http://esp32-workbench.local:8080/api/test/update \
+curl -X POST http://workbench.local:8080/api/test/update \
   -H 'Content-Type: application/json' \
   -d '{"end": true}'
 
 # Poll current progress
-curl http://esp32-workbench.local:8080/api/test/progress
+curl http://workbench.local:8080/api/test/progress
 ```
 
 ### Python Driver Methods
@@ -85,18 +85,18 @@ Some test steps require physical actions that cannot be automated — pressing a
 
 ```bash
 # Request operator action (blocks until Done/Cancel/timeout)
-curl -X POST http://esp32-workbench.local:8080/api/human-interaction \
+curl -X POST http://workbench.local:8080/api/human-interaction \
   -H 'Content-Type: application/json' \
   -d '{"message": "Connect USB cable to port 2 and click Done", "timeout": 120}'
 
 # Check if a request is pending
-curl http://esp32-workbench.local:8080/api/human/status
+curl http://workbench.local:8080/api/human/status
 
 # Operator confirms
-curl -X POST http://esp32-workbench.local:8080/api/human/done
+curl -X POST http://workbench.local:8080/api/human/done
 
 # Operator cancels
-curl -X POST http://esp32-workbench.local:8080/api/human/cancel
+curl -X POST http://workbench.local:8080/api/human/cancel
 ```
 
 ### Responses
@@ -128,10 +128,10 @@ Timestamped log of all workbench operations — hotplug events, WiFi operations,
 
 ```bash
 # Get all entries
-curl -s http://esp32-workbench.local:8080/api/log | jq .
+curl -s http://workbench.local:8080/api/log | jq .
 
 # Get entries since a timestamp
-curl -s "http://esp32-workbench.local:8080/api/log?since=2025-01-01T00:00:00Z" | jq .
+curl -s "http://workbench.local:8080/api/log?since=2025-01-01T00:00:00Z" | jq .
 ```
 
 ## Common Workflows

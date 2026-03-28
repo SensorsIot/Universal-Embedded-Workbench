@@ -28,21 +28,21 @@ Upload to the workbench and flash via RFC2217:
 ```bash
 # Upload binary for OTA (optional, needed for OTA test)
 curl -F "file=@build/wb-test-firmware.bin" \
-     "http://esp32-workbench.local:8080/api/firmware/upload?project=test-firmware&filename=wb-test-firmware.bin"
+     "http://workbench.local:8080/api/firmware/upload?project=test-firmware&filename=wb-test-firmware.bin"
 
 # Flash via serial
-esptool.py --port rfc2217://esp32-workbench.local:4001?ign_set_control \
+esptool.py --port rfc2217://workbench.local:4001?ign_set_control \
            --chip esp32s3 --baud 460800 \
            write_flash @flash_args
 ```
 
-Or use the `esp32-workbench-serial-flashing` skill.
+Or use the `workbench-serial-flashing` skill.
 
 ## What the Firmware Does
 
 | Module | What it exercises |
 |--------|-------------------|
-| `udp_log.c` | UDP log forwarding to `esp32-workbench.local:5555` |
+| `udp_log.c` | UDP log forwarding to `workbench.local:5555` |
 | `wifi_prov.c` | SoftAP captive portal (`WB-Test-Setup`), STA mode with stored creds |
 | `ble_nus.c` | BLE advertisement as `WB-Test`, NUS service |
 | `ota_update.c` | HTTP OTA from workbench firmware server |
@@ -56,14 +56,14 @@ Each workbench skill maps to specific test steps using the firmware:
 
 | Skill | Test steps | What confirms it works |
 |-------|-----------|----------------------|
-| `esp32-workbench-serial-flashing` | Erase flash, trigger flapping, recover, re-flash | Flapping detected, recovery runs, firmware boots after re-flash |
-| `esp32-workbench-logging` | Start serial monitor; check UDP logs | Serial shows boot output; `GET /api/udplog` returns heartbeat lines |
-| `esp32-workbench-wifi` | Run `enter-portal` with device in AP mode | Serial shows `"STA got IP"`, device joins workbench network |
-| `esp32-workbench-ble` | Scan for `WB-Test`, connect, discover services | BLE scan finds device; NUS service UUID appears in characteristics |
-| `esp32-workbench-ota` | Upload binary, trigger OTA via HTTP `/ota` | Serial shows `"OTA succeeded"`, device reboots with new firmware |
-| `esp32-workbench-gpio` | Toggle EN pin to reset device (GPIO slots only) | Serial monitor shows fresh boot output |
-| `esp32-workbench-mqtt` | Start broker, verify device can reach `192.168.4.1:1883` | (Firmware doesn't use MQTT; test broker start/stop independently) |
-| `esp32-workbench-test` | Run full validation walkthrough below | All steps pass |
+| `workbench-serial-flashing` | Erase flash, trigger flapping, recover, re-flash | Flapping detected, recovery runs, firmware boots after re-flash |
+| `workbench-logging` | Start serial monitor; check UDP logs | Serial shows boot output; `GET /api/udplog` returns heartbeat lines |
+| `workbench-wifi` | Run `enter-portal` with device in AP mode | Serial shows `"STA got IP"`, device joins workbench network |
+| `workbench-ble` | Scan for `WB-Test`, connect, discover services | BLE scan finds device; NUS service UUID appears in characteristics |
+| `workbench-ota` | Upload binary, trigger OTA via HTTP `/ota` | Serial shows `"OTA succeeded"`, device reboots with new firmware |
+| `workbench-gpio` | Toggle EN pin to reset device (GPIO slots only) | Serial monitor shows fresh boot output |
+| `workbench-mqtt` | Start broker, verify device can reach `192.168.4.1:1883` | (Firmware doesn't use MQTT; test broker start/stop independently) |
+| `workbench-test` | Run full validation walkthrough below | All steps pass |
 
 ## Validation Walkthrough
 
@@ -84,12 +84,12 @@ attempts recovery. The recovery path depends on whether the slot has GPIO.
 **GPIO slot** — use the recover API to enter download mode, erase, then release:
 
 ```bash
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/recover \
+curl -s -X POST http://workbench.local:8080/api/serial/recover \
      -H "Content-Type: application/json" -d '{"slot": "<SLOT>"}'
 # Wait for download mode (~15s)
-esptool.py --port rfc2217://esp32-workbench.local:<PORT>?ign_set_control \
+esptool.py --port rfc2217://workbench.local:<PORT>?ign_set_control \
            --chip esp32s3 erase_flash
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/release \
+curl -s -X POST http://workbench.local:8080/api/serial/release \
      -H "Content-Type: application/json" -d '{"slot": "<SLOT>"}'
 ```
 
@@ -97,7 +97,7 @@ curl -s -X POST http://esp32-workbench.local:8080/api/serial/release \
 port first, or use `--before=usb_reset`):
 
 ```bash
-ssh pi@esp32-workbench.local "python3 -m esptool --port <DEVNODE> \
+ssh pi@workbench.local "python3 -m esptool --port <DEVNODE> \
     --before=usb_reset --chip esp32s3 erase_flash"
 ```
 
@@ -108,7 +108,7 @@ The device reboots into erased flash and starts boot-looping.
 Within ~30 seconds the portal detects the flapping:
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/devices | python3 -m json.tool
+curl -s http://workbench.local:8080/api/devices | python3 -m json.tool
 ```
 
 Confirm for the target slot:
@@ -137,10 +137,10 @@ Flash test firmware. This also serves as the recovery step after flapping.
 **GPIO slot** (device is in download mode from step 1c):
 
 ```bash
-esptool.py --port rfc2217://esp32-workbench.local:<PORT>?ign_set_control \
+esptool.py --port rfc2217://workbench.local:<PORT>?ign_set_control \
            --chip esp32s3 --baud 460800 \
            write_flash @flash_args
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/release \
+curl -s -X POST http://workbench.local:8080/api/serial/release \
      -H "Content-Type: application/json" -d '{"slot": "<SLOT>"}'
 ```
 
@@ -150,9 +150,9 @@ curl -s -X POST http://esp32-workbench.local:8080/api/serial/release \
 # Upload build artifacts to Pi first
 scp build/bootloader/bootloader.bin build/wb-test-firmware.bin \
     build/partition_table/partition-table.bin build/ota_data_initial.bin \
-    pi@esp32-workbench.local:/tmp/
+    pi@workbench.local:/tmp/
 
-ssh pi@esp32-workbench.local "python3 -m esptool --port <DEVNODE> \
+ssh pi@workbench.local "python3 -m esptool --port <DEVNODE> \
     --before=usb_reset --chip esp32s3 --baud 460800 \
     write_flash --flash_mode dio --flash_freq 80m --flash_size <FLASH_SIZE> \
     0x0 /tmp/bootloader.bin \
@@ -166,7 +166,7 @@ Use `--flash_size` matching the board (check with `flash_id` or `GET /api/device
 After flashing, verify boot via serial reset:
 
 ```bash
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/reset \
+curl -s -X POST http://workbench.local:8080/api/serial/reset \
      -H "Content-Type: application/json" \
      -d '{"slot": "<SLOT>", "lines": 80}'
 ```
@@ -174,7 +174,7 @@ curl -s -X POST http://esp32-workbench.local:8080/api/serial/reset \
 Confirm output contains:
 - `"=== Workbench Test Firmware v0.1.0 ==="`
 - `"NVS initialized"`
-- `"UDP logging -> esp32-workbench.local:5555"`
+- `"UDP logging -> workbench.local:5555"`
 - `"No WiFi credentials, starting AP provisioning"`
 - `"AP mode: SSID='WB-Test-Setup'"`
 - `"BLE NUS initialized"`
@@ -203,7 +203,7 @@ poll, aged-out events are pruned from `_event_times` within `FLAP_WINDOW_S`
 
 1. After WiFi is connected, check UDP logs:
    ```bash
-   curl -s http://esp32-workbench.local:8080/api/udplog | head -20
+   curl -s http://workbench.local:8080/api/udplog | head -20
    ```
 2. Confirm heartbeat lines appear: `"heartbeat N | wifi=1 ble=0"`
 
@@ -212,7 +212,7 @@ poll, aged-out events are pruned from `_event_times` within `FLAP_WINDOW_S`
 1. Get device IP from serial output or workbench scan
 2. Via HTTP relay:
    ```bash
-   curl -s -X POST http://esp32-workbench.local:8080/api/wifi/http \
+   curl -s -X POST http://workbench.local:8080/api/wifi/http \
         -H "Content-Type: application/json" \
         -d '{"method":"GET","url":"http://<device-ip>/status"}'
    ```
@@ -222,7 +222,7 @@ poll, aged-out events are pruned from `_event_times` within `FLAP_WINDOW_S`
 
 1. Scan for BLE devices:
    ```bash
-   curl -s -X POST http://esp32-workbench.local:8080/api/ble/scan \
+   curl -s -X POST http://workbench.local:8080/api/ble/scan \
         -H "Content-Type: application/json" \
         -d '{"duration": 5}'
    ```
@@ -234,7 +234,7 @@ poll, aged-out events are pruned from `_event_times` within `FLAP_WINDOW_S`
 1. Ensure firmware binary is uploaded to workbench (see Flashing section)
 2. Trigger OTA via HTTP:
    ```bash
-   curl -s -X POST http://esp32-workbench.local:8080/api/wifi/http \
+   curl -s -X POST http://workbench.local:8080/api/wifi/http \
         -H "Content-Type: application/json" \
         -d '{"method":"POST","url":"http://<device-ip>/ota"}'
    ```
@@ -245,7 +245,7 @@ poll, aged-out events are pruned from `_event_times` within `FLAP_WINDOW_S`
 
 1. Via HTTP:
    ```bash
-   curl -s -X POST http://esp32-workbench.local:8080/api/wifi/http \
+   curl -s -X POST http://workbench.local:8080/api/wifi/http \
         -H "Content-Type: application/json" \
         -d '{"method":"POST","url":"http://<device-ip>/wifi-reset"}'
    ```
@@ -263,7 +263,7 @@ the slot is not currently flapping. Resets the retry counter and starts a fresh
 recovery cycle.
 
 ```bash
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/recover \
+curl -s -X POST http://workbench.local:8080/api/serial/recover \
      -H "Content-Type: application/json" -d '{"slot": "<SLOT>"}'
 ```
 

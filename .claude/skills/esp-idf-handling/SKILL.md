@@ -21,7 +21,7 @@ and monitoring. Automatically adapts to local USB or remote workbench.
 Determine whether a workbench is available or the device is local.
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/info
+curl -s http://workbench.local:8080/api/info
 ```
 
 - **Response received** → workbench is available, use remote flashing (RFC2217/OTA)
@@ -108,7 +108,7 @@ When a workbench is available. Use serial flashing when:
 Slots are mapped to physical USB hub ports via prefix matching (configured in `workbench.json`). There are 3 fixed slots: SLOT1 (:4001), SLOT2 (:4002), SLOT3 (:4003). Always read the slot info from `/api/devices` to verify the device is present.
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/devices | jq .
+curl -s http://workbench.local:8080/api/devices | jq .
 ```
 
 Response fields per slot: `label`, `state`, `url` (RFC2217, auto-assigned port), `present`, `running`.
@@ -123,7 +123,7 @@ Response fields per slot: `label`, `state`, `url` (RFC2217, auto-assigned port),
 **For dual-USB boards**, identify which slot is which:
 
 ```bash
-ssh pi@esp32-workbench.local "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
+ssh pi@workbench.local "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
 # Contains "Espressif" → JTAG slot (flash + reset here)
 # Contains "1a86", "CH340", "CP210x" → UART slot (serial console here)
 ```
@@ -136,7 +136,7 @@ as default for both.
 
 ```bash
 # Get the RFC2217 URL
-SLOT_URL=$(curl -s http://esp32-workbench.local:8080/api/devices | jq -r '.slots[0].url')
+SLOT_URL=$(curl -s http://workbench.local:8080/api/devices | jq -r '.slots[0].url')
 
 # Flash using build-generated flash_args (recommended)
 cd build && esptool.py --port "${SLOT_URL}?ign_set_control" \
@@ -161,7 +161,7 @@ esptool.py --port "${SLOT_URL}?ign_set_control" --chip esp32s3 erase_region 0x90
 ### Serial reset
 
 ```bash
-curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
+curl -X POST http://workbench.local:8080/api/serial/reset \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1"}'
 ```
@@ -185,35 +185,35 @@ is on the WiFi network. Faster than serial and doesn't block the serial port.
 
 ```bash
 # 1. Upload firmware to workbench
-curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
+curl -X POST http://workbench.local:8080/api/firmware/upload \
   -F "project=my-project" \
   -F "file=@build/firmware.bin"
 
 # 2. Verify upload
-curl -s http://esp32-workbench.local:8080/api/firmware/list | jq .
+curl -s http://workbench.local:8080/api/firmware/list | jq .
 
 # 3. Trigger OTA on the ESP32 via HTTP relay
-OTA_BODY=$(echo -n '{"url":"http://esp32-workbench.local:8080/firmware/my-project/firmware.bin"}' | base64)
-curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
+OTA_BODY=$(echo -n '{"url":"http://workbench.local:8080/firmware/my-project/firmware.bin"}' | base64)
+curl -X POST http://workbench.local:8080/api/wifi/http \
   -H 'Content-Type: application/json' \
   -d "{\"method\": \"POST\", \"url\": \"http://192.168.4.2/ota\", \"headers\": {\"Content-Type\": \"application/json\"}, \"body\": \"$OTA_BODY\", \"timeout\": 30}"
 
 # 4. Monitor OTA progress via UDP logs
-curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
+curl "http://workbench.local:8080/api/udplog?limit=50"
 ```
 
 ### Firmware repository management
 
 ```bash
 # List all uploaded firmware
-curl http://esp32-workbench.local:8080/api/firmware/list
+curl http://workbench.local:8080/api/firmware/list
 
 # Delete a firmware file
-curl -X DELETE http://esp32-workbench.local:8080/api/firmware/delete \
+curl -X DELETE http://workbench.local:8080/api/firmware/delete \
   -H 'Content-Type: application/json' \
   -d '{"project": "my-project", "filename": "firmware.bin"}'
 
-# Download URL for ESP32: http://esp32-workbench.local:8080/firmware/<project>/<filename>
+# Download URL for ESP32: http://workbench.local:8080/firmware/<project>/<filename>
 ```
 
 ## Step 5: Monitor
@@ -224,7 +224,7 @@ idf.py -p /dev/ttyUSB0 monitor
 
 # Workbench — via serial monitor API (see workbench-logging skill)
 # or via UDP logs
-curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
+curl "http://workbench.local:8080/api/udplog?limit=50"
 ```
 
 ### Monitor shortcuts
@@ -250,19 +250,19 @@ Allowed BCM pins: `5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27`
 
 ```bash
 # 1. Hold BOOT LOW
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 18, "value": 0}'
 sleep 1
 # 2. Pull EN LOW (reset)
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 17, "value": 0}'
 sleep 0.2
 # 3. Release EN HIGH (ESP32 exits reset, samples BOOT=LOW → download mode)
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 17, "value": 1}'
 sleep 0.5
 # 4. Release BOOT HIGH
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H 'Content-Type: application/json' -d '{"pin": 18, "value": 1}'
 ```
 
@@ -270,7 +270,7 @@ curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
 
 ```bash
 sleep 5  # Wait for USB re-enumeration
-esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=no_reset write_flash @flash_args
 ```
 
@@ -291,7 +291,7 @@ Not all boards have EN/BOOT wired to Pi GPIOs. Run once per board:
 When firmware crashes on boot (repeated `rst:0xc (RTC_SW_CPU_RST)` with backtraces):
 
 ```bash
-esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=usb_reset erase_flash
 ```
 
@@ -312,8 +312,8 @@ After portal reaches `download_mode`, upload and flash on the Pi:
 
 ```bash
 scp build/bootloader/bootloader.bin build/partition_table/partition-table.bin \
-    build/ota_data_initial.bin build/*.bin pi@esp32-workbench.local:/tmp/
-ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
+    build/ota_data_initial.bin build/*.bin pi@workbench.local:/tmp/
+ssh pi@workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
   write_flash --flash_mode dio --flash_size 4MB \
   0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin \
   0xf000 /tmp/ota_data_initial.bin 0x20000 /tmp/firmware.bin"
@@ -322,7 +322,7 @@ ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyA
 Then release GPIO:
 
 ```bash
-curl -X POST http://esp32-workbench.local:8080/api/serial/release \
+curl -X POST http://workbench.local:8080/api/serial/release \
   -H 'Content-Type: application/json' -d '{"slot": "slot-1"}'
 ```
 
@@ -337,7 +337,7 @@ After 2 failed attempts, flash directly on the Pi with `esptool --before=usb_res
 ### Manual recovery trigger
 
 ```bash
-curl -X POST http://esp32-workbench.local:8080/api/serial/recover \
+curl -X POST http://workbench.local:8080/api/serial/recover \
   -H 'Content-Type: application/json' -d '{"slot": "slot-1"}'
 ```
 

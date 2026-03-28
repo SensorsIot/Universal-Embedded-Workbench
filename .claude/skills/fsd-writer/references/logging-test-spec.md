@@ -193,16 +193,16 @@ Standard test cases for ESP32 logging and debug output functionality (serial, UD
 
 ```bash
 # View UDP logs from device
-curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
+curl "http://workbench.local:8080/api/udplog?limit=50"
 
 # View UDP logs filtered by source
-curl "http://esp32-workbench.local:8080/api/udplog?source=192.168.4.2&limit=20"
+curl "http://workbench.local:8080/api/udplog?source=192.168.4.2&limit=20"
 
 # Clear UDP log buffer
-curl -X DELETE http://esp32-workbench.local:8080/api/udplog
+curl -X DELETE http://workbench.local:8080/api/udplog
 
 # Serial monitor via workbench
-curl -X POST http://esp32-workbench.local:8080/api/serial/monitor \
+curl -X POST http://workbench.local:8080/api/serial/monitor \
   -H 'Content-Type: application/json' \
   -d '{"slot": "slot-1", "pattern": "ERROR\\|WARN", "timeout": 30}'
 ```

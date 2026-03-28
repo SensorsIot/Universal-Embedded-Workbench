@@ -212,14 +212,14 @@ Standard test cases for ESP32 MQTT client functionality. Copy relevant sections 
 
 ```bash
 # Start MQTT broker on workbench
-curl -X POST http://esp32-workbench.local:8080/api/mqtt/start
+curl -X POST http://workbench.local:8080/api/mqtt/start
 
 # Subscribe to device topics
-mosquitto_sub -h esp32-workbench.local -t "device/#" -v
+mosquitto_sub -h workbench.local -t "device/#" -v
 
 # Publish command to device
-mosquitto_pub -h esp32-workbench.local -t "device/cmd" -m '{"action":"status"}'
+mosquitto_pub -h workbench.local -t "device/cmd" -m '{"action":"status"}'
 
 # Stop MQTT broker
-curl -X POST http://esp32-workbench.local:8080/api/mqtt/stop
+curl -X POST http://workbench.local:8080/api/mqtt/stop
 ```

@@ -63,7 +63,7 @@ The workbench auto-assigns serial ports. Query `/api/devices` to find the port, 
 
 ```bash
 # Find the auto-assigned port
-PORT=$(curl -s http://esp32-workbench.local:8080/api/devices | \
+PORT=$(curl -s http://workbench.local:8080/api/devices | \
   python3 -c "import json,sys; d=json.load(sys.stdin); print(next(s['url'] for s in d['slots'] if s.get('present')))")
 
 # Flash (example: C6)
@@ -81,19 +81,19 @@ After flashing, verify the full debug chain:
 
 ```bash
 # 1. Check firmware running (serial)
-curl -s -X POST http://esp32-workbench.local:8080/api/serial/monitor \
+curl -s -X POST http://workbench.local:8080/api/serial/monitor \
   -H "Content-Type: application/json" \
   -d '{"slot":"AUTO-1","pattern":"LOOP:","timeout":5}'
 # Expected: {"ok":true,"matched":true,"line":"LOOP: 42"}
 
 # 2. Check debug auto-started
-curl -s http://esp32-workbench.local:8080/api/devices | \
+curl -s http://workbench.local:8080/api/devices | \
   python3 -c "import json,sys; d=json.load(sys.stdin); s=next(x for x in d['slots'] if x.get('present')); print(f'chip={s.get(\"debug_chip\")}, gdb=:{s.get(\"debug_gdb_port\")}')"
 # Expected: chip=esp32c6, gdb=:3333
 
 # 3. Connect GDB (RISC-V example)
 riscv32-esp-elf-gdb output/esp32c6/debug-test.elf \
-  -ex "target extended-remote esp32-workbench.local:3333" \
+  -ex "target extended-remote workbench.local:3333" \
   -ex "monitor reset halt" \
   -ex "break debug_loop" \
   -ex "continue" \

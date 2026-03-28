@@ -1,4 +1,4 @@
-# Serial Portal — Functional Specification Document
+# Embedded Workbench — Functional Specification Document
 
 ## 1. Overview
 
@@ -22,7 +22,7 @@ and reporting station events — all controlled over the same HTTP API.
        ▼                                               ▼
 ┌─────────────────────────┐              ┌─────────────────────────────────┐
 │  Serial Portal Pi       │              │  VM Host (192.168.0.160)        │
-│  esp32-workbench.local           │              │                                 │
+│  workbench.local           │              │                                 │
 │                         │              │  ┌─────────────────────┐        │
 │  ┌───────────┐          │              │  │ Container A         │        │
 │  │ SLOT1     │──────────┼─ :4001 ──────┼──│ rfc2217://:4001     │        │
@@ -66,7 +66,7 @@ and reporting station events — all controlled over the same HTTP API.
 
 | Component | Details |
 |-----------|---------|
-| Raspberry Pi Zero W | esp32-workbench.local, onboard wlan0 radio |
+| Raspberry Pi Zero W | workbench.local, onboard wlan0 radio |
 | USB Hub | 4-port hub connected to single USB port |
 | USB Ethernet adapter | eth0 — wired LAN for management and serial traffic |
 | Devices | ESP32, Arduino, or any USB serial device |
@@ -104,7 +104,7 @@ Mode is switched via `POST /api/wifi/mode` or the web UI toggle.
 | rfc2217-learn-slots | /usr/local/bin/rfc2217-learn-slots | Slot configuration helper |
 | 99-rfc2217-hotplug.rules | /etc/udev/rules.d/ | udev rules for hotplug |
 | workbench.json | /etc/rfc2217/workbench.json | Hardware config (GPIO pins, debug probes) — optional |
-| esp32_workbench_driver.py | pytest/ | HTTP test driver for the WiFi instrument |
+| workbench_driver.py | pytest/ | HTTP test driver for the WiFi instrument |
 | conftest.py | pytest/ | Pytest fixtures and CLI options |
 | test_instrument.py | pytest/ | WiFi workbench self-tests (WT-xxx) |
 | cw_beacon.py | /usr/local/bin/cw_beacon.py | CW beacon engine (GPCLK hardware clock + Morse keying) |
@@ -310,7 +310,7 @@ plugging a device into each physical port and running:
       "devnode": "/dev/ttyACM0",
       "devnodes": ["/dev/ttyACM0", "/dev/ttyACM1"],
       "pid": 1234,
-      "url": "rfc2217://esp32-workbench.local:4001",
+      "url": "rfc2217://workbench.local:4001",
       "seq": 5,
       "last_action": "add",
       "last_event_ts": "2026-02-05T12:34:56+00:00",
@@ -327,8 +327,8 @@ plugging a device into each physical port and running:
       ]
     }
   ],
-  "host_ip": "esp32-workbench.local",
-  "hostname": "esp32-workbench.local"
+  "host_ip": "workbench.local",
+  "hostname": "workbench.local"
 }
 ```
 
@@ -471,7 +471,7 @@ through directly.
 
 ```bash
 python3 -m esptool --chip esp32c3 \
-  --port "rfc2217://esp32-workbench.local:4001" \
+  --port "rfc2217://workbench.local:4001" \
   --before=usb-reset --after=watchdog-reset \
   write_flash 0x10000 firmware.bin
 ```
@@ -480,7 +480,7 @@ python3 -m esptool --chip esp32c3 \
 
 ```bash
 python3 -m esptool --chip esp32 \
-  --port "rfc2217://esp32-workbench.local:4001" \
+  --port "rfc2217://workbench.local:4001" \
   --before=default-reset --after=hard-reset \
   write_flash 0x10000 firmware.bin
 ```
@@ -505,7 +505,7 @@ window between reboots.  Use `erase_flash` to wipe the bad firmware and stop
 the loop:
 
 ```bash
-esptool.py --port "rfc2217://esp32-workbench.local:<PORT>?ign_set_control" \
+esptool.py --port "rfc2217://workbench.local:<PORT>?ign_set_control" \
   --chip esp32s3 --before=usb_reset erase_flash
 ```
 
@@ -521,7 +521,7 @@ When connecting to an ESP32-C3 via RFC2217, the client must prevent DTR
 assertion during connection negotiation:
 
 ```python
-ser = serial.serial_for_url('rfc2217://esp32-workbench.local:4001', do_not_open=True)
+ser = serial.serial_for_url('rfc2217://workbench.local:4001', do_not_open=True)
 ser.baudrate = 115200
 ser.timeout = 2
 ser.dtr = False   # CRITICAL: prevents download mode
@@ -670,7 +670,7 @@ The device is now stable in the bootloader.  Flash firmware directly on
 the Pi (the RFC2217 proxy is not running in this state):
 
 ```bash
-ssh pi@esp32-workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
+ssh pi@workbench.local "python3 -m esptool --chip esp32s3 --port /dev/ttyACM1 \
   write_flash 0x0 bootloader.bin 0x8000 partition-table.bin \
   0xf000 ota_data_initial.bin 0x20000 app.bin"
 ```
@@ -1133,7 +1133,7 @@ wt.udplog_clear()
 **Implementation notes:**
 - Thread-safe: deque operations are atomic; timestamp+source stored per entry
 - Non-blocking: UDP recv in a loop with 1s timeout for clean shutdown
-- ESP32 remote_log.c sends to the configured host:port (default esp32-workbench.local:5555)
+- ESP32 remote_log.c sends to the configured host:port (default workbench.local:5555)
 
 ### FR-021 — OTA Firmware Repository
 
@@ -1171,7 +1171,7 @@ internet access or external hosting during development and testing.
 Serves the raw binary file with `Content-Type: application/octet-stream`.
 This is the URL the ESP32 OTA client points to, e.g.:
 ```
-http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
+http://workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
 ```
 
 Path traversal is rejected (no `..` allowed in project or filename).
@@ -1208,7 +1208,7 @@ Path traversal is rejected (no `..` allowed in project or filename).
 files = wt.firmware_list()
 wt.firmware_upload("ios-keyboard", "/path/to/ios-keyboard.bin")
 wt.firmware_delete("ios-keyboard", "ios-keyboard.bin")
-# ESP32 OTA URL: http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
+# ESP32 OTA URL: http://workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
 ```
 
 **End-to-end OTA workflow:**
@@ -1231,7 +1231,7 @@ client on the LAN.
    POST /api/wifi/http  {"method":"POST", "url":"http://192.168.4.15/ota"}
    ```
    The ESP32 must expose a `POST /ota` endpoint that calls `esp_ota_ops`
-   to download from `http://esp32-workbench.local:8080/firmware/<project>/<file>.bin`.
+   to download from `http://workbench.local:8080/firmware/<project>/<file>.bin`.
 4. **Monitor progress** via UDP logs:
    ```
    GET /api/udplog?source=192.168.4.15
@@ -1685,7 +1685,7 @@ blocked — the chip's CPU is under OpenOCD control.
   "gdb_port": 3333,
   "telnet_port": 4444,
   "chip": "esp32c3",
-  "gdb_target": "target extended-remote esp32-workbench.local:3333"
+  "gdb_target": "target extended-remote workbench.local:3333"
 }
 ```
 
@@ -1766,7 +1766,7 @@ during debug sessions for native USB-Serial/JTAG devices.
 # Start debug session
 info = wt.debug_start("SLOT1", chip="esp32c3")
 print(f"GDB port: {info['gdb_port']}")
-# → Connect GDB: target extended-remote esp32-workbench.local:3333
+# → Connect GDB: target extended-remote workbench.local:3333
 
 # Check status
 status = wt.debug_status()
@@ -1784,7 +1784,7 @@ wt.debug_stop("SLOT1")
   "request": "launch",
   "program": "${workspaceFolder}/build/project.elf",
   "miDebuggerPath": "riscv32-esp-elf-gdb",
-  "miDebuggerServerAddress": "esp32-workbench.local:3333",
+  "miDebuggerServerAddress": "workbench.local:3333",
   "setupCommands": [
     {"text": "set remote hardware-breakpoint-limit 2"},
     {"text": "monitor reset halt"}
@@ -1795,7 +1795,7 @@ wt.debug_stop("SLOT1")
 **Command-line GDB:**
 ```bash
 riscv32-esp-elf-gdb build/project.elf \
-  -ex "target extended-remote esp32-workbench.local:3333" \
+  -ex "target extended-remote workbench.local:3333" \
   -ex "monitor reset halt"
 ```
 
@@ -1804,7 +1804,7 @@ riscv32-esp-elf-gdb build/project.elf \
 debug_tool = esp-builtin
 debug_server =
   # empty — use remote server instead
-debug_port = esp32-workbench.local:3333
+debug_port = workbench.local:3333
 ```
 
 #### 24.13 Auto-Start on Hotplug
@@ -2121,7 +2121,7 @@ slot.  The portal tracks which slot's DUT is connected to the probe.
   "chip": "esp32",
   "gdb_port": 3333,
   "telnet_port": 4444,
-  "gdb_target": "target extended-remote esp32-workbench.local:3333"
+  "gdb_target": "target extended-remote workbench.local:3333"
 }
 ```
 
@@ -2581,7 +2581,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 6.1 | 2026-02-09 | Claude | Human interaction request (FR-017): blocking endpoint for test steps requiring physical operator actions; pulsing orange UI modal; ThreadingHTTPServer for concurrent requests; driver `human_interaction()` method; WT-700–703 test cases |
 | 6.2 | 2026-02-09 | Claude | GPIO control (FR-018): drive Pi GPIO pins from test scripts to control DUT hardware signals (e.g. hold GPIO 2 low during boot for captive portal trigger); pin allowlist, lazy gpiod init, release-to-input lifecycle; WT-800–806 test cases. Test progress tracking (FR-019): live test session updates pushed to web UI; WT-900–903 test cases |
 | 7.0 | 2026-02-25 | Claude | Three new services: UDP log receiver (FR-020) for ESP32 remote debug logs on port 5555; OTA firmware repository (FR-021) for serving .bin files to ESP32 OTA clients; BLE proxy (FR-022) for scan/connect/write to BLE peripherals via HTTP API using bleak. New deliverable: `ble_controller.py`. WT-1000–1207 test cases |
-| 7.1 | 2026-03-15 | Claude | Hostname renamed Serial1 → esp32-workbench; all references updated to esp32-workbench.local. UDP discovery beacon added to portal.py (port 5888) — containers can discover the workbench automatically. Skills consolidated from 14 → 9: merged flash skills into `esp-idf-handling` (auto-detects local vs workbench), PIO skills into `esp-pio-handling`, FSD + WiFi tests into `fsd-writer` with 9 test spec libraries (WiFi, captive portal, MQTT, BLE, OTA, USB HID, NVS, watchdog, logging). Removed `esp32-` prefix from workbench service skills. `fsd-writer` renamed from `esp32-fsd-writer` to be project-agnostic |
+| 7.1 | 2026-03-15 | Claude | Hostname renamed Serial1 → workbench; all references updated to workbench.local. UDP discovery beacon added to portal.py (port 5888) — containers can discover the workbench automatically. Skills consolidated from 14 → 9: merged flash skills into `esp-idf-handling` (auto-detects local vs workbench), PIO skills into `esp-pio-handling`, FSD + WiFi tests into `fsd-writer` with 9 test spec libraries (WiFi, captive portal, MQTT, BLE, OTA, USB HID, NVS, watchdog, logging). Removed `esp32-` prefix from workbench service skills. `fsd-writer` renamed from `esp32-fsd-writer` to be project-agnostic |
 | 8.1 | 2026-03-28 | Claude | Auto-debug: OpenOCD starts automatically on hotplug/boot with chip auto-detection (C3/S3/C6/H2 via USB JTAG, classic ESP32 via ESP-Prog fallback). Debug status in /api/devices. Hotplug suppression during active debug. Zero-config: just plug in any ESP32. WT-1700–1709 test cases. TASK-160–166 |
 | 8.3 | 2026-03-28 | Claude | Auto-discovery: fully plug-and-play slot management. No slots.json needed — devices auto-assigned labels (AUTO-1, AUTO-2), TCP ports (4001+), GDB ports (3333+). Renamed slots.json to workbench.json (hardware config only). Remove hotplug events processed during debugging (unplug detection fix). End-to-end verified: plug→flash→debug with zero configuration |
 | 8.2 | 2026-03-28 | Claude | JTAG-based reset and recovery: `/api/serial/reset` auto-selects JTAG reset when debug session is active (no USB re-enumeration, no flapping risk). Flapping recovery via JTAG halt when available. Skills updated with JTAG reset documentation |
@@ -2828,7 +2828,7 @@ Add this to /etc/rfc2217/workbench.json:
 - [x] TASK-009: Update web UI to show slot-based view
 - [x] TASK-010: Boot scan for already-plugged devices
 - [ ] TASK-011: Test all test cases
-- [ ] TASK-012: Deploy to Serial Pi (esp32-workbench.local)
+- [ ] TASK-012: Deploy to Serial Pi (workbench.local)
 
 **Serial Services (v6.0):**
 - [ ] TASK-050: Implement `POST /api/serial/reset` (FR-008)
@@ -2850,7 +2850,7 @@ Add this to /etc/rfc2217/workbench.json:
 - [x] TASK-021: Add WiFi API routes to portal.py
 - [x] TASK-022: Implement mode switching (wifi-testing / serial-interface)
 - [x] TASK-023: Create wifi-lease-notify.sh for dnsmasq callbacks
-- [x] TASK-024: Create esp32_workbench_driver.py (HTTP test driver)
+- [x] TASK-024: Create workbench_driver.py (HTTP test driver)
 - [x] TASK-025: Create conftest.py + test_instrument.py (WT-xxx tests)
 - [x] TASK-026: Add WiFi section to web UI with mode toggle
 - [x] TASK-027: Activity log system (deque, `log_activity()`, `GET /api/log`)
@@ -2864,32 +2864,32 @@ Add this to /etc/rfc2217/workbench.json:
 - [x] TASK-061: Implement `GET /api/human/status`, `POST /api/human/done`, `POST /api/human/cancel`
 - [x] TASK-062: Human interaction modal in web UI (pulsing orange overlay, Done/Cancel)
 - [x] TASK-063: Switch to `ThreadingHTTPServer` for concurrent request handling
-- [x] TASK-064: Add `human_interaction()` method to `esp32_workbench_driver.py`
+- [x] TASK-064: Add `human_interaction()` method to `workbench_driver.py`
 - [x] TASK-065: Add `Cache-Control: no-cache` to UI HTML response
 
 **GPIO Control (v6.2):**
 - [x] TASK-070: Implement `POST /api/gpio/set` with pin allowlist and gpiod v2 API (FR-018)
 - [x] TASK-071: Implement `GET /api/gpio/status` for active pin readback (FR-018)
-- [x] TASK-072: Add `gpio_set()` and `gpio_get()` methods to `esp32_workbench_driver.py`
+- [x] TASK-072: Add `gpio_set()` and `gpio_get()` methods to `workbench_driver.py`
 - [ ] TASK-073: Implement WT-800–806 GPIO test cases in `test_instrument.py`
 
 **Test Progress (v6.2):**
 - [x] TASK-080: Implement `POST /api/test/update` and `GET /api/test/progress` (FR-019)
 - [x] TASK-081: Test progress panel in web UI (progress bar, current step, results)
-- [x] TASK-082: Add `test_start/step/result/end()` methods to `esp32_workbench_driver.py`
+- [x] TASK-082: Add `test_start/step/result/end()` methods to `workbench_driver.py`
 - [ ] TASK-083: Implement WT-900–903 test progress test cases
 
 **UDP Log Receiver (v7.0):**
 - [ ] TASK-090: Implement UDP socket listener thread in portal.py (FR-020)
 - [ ] TASK-091: Implement `GET /api/udplog` and `DELETE /api/udplog` endpoints
-- [ ] TASK-092: Add `udplog()` and `udplog_clear()` methods to `esp32_workbench_driver.py`
+- [ ] TASK-092: Add `udplog()` and `udplog_clear()` methods to `workbench_driver.py`
 - [ ] TASK-093: Implement WT-1000–1005 UDP log test cases
 
 **OTA Firmware Repository (v7.0):**
 - [ ] TASK-100: Create firmware directory and path-safe file serving (FR-021)
 - [ ] TASK-101: Implement `GET /firmware/<project>/<filename>` binary serving
 - [ ] TASK-102: Implement `GET /api/firmware/list`, `POST /api/firmware/upload`, `DELETE /api/firmware/delete`
-- [ ] TASK-103: Add `firmware_list/upload/delete()` methods to `esp32_workbench_driver.py`
+- [ ] TASK-103: Add `firmware_list/upload/delete()` methods to `workbench_driver.py`
 - [ ] TASK-104: Update install.sh to create firmware directory
 - [ ] TASK-105: Implement WT-1100–1105 firmware test cases
 
@@ -2899,7 +2899,7 @@ Add this to /etc/rfc2217/workbench.json:
 - [ ] TASK-112: Implement BLE connect/disconnect with state tracking
 - [ ] TASK-113: Implement BLE write to GATT characteristic
 - [ ] TASK-114: Add BLE API routes to portal.py (`/api/ble/*`)
-- [ ] TASK-115: Add `ble_scan/connect/disconnect/status/write()` methods to `esp32_workbench_driver.py`
+- [ ] TASK-115: Add `ble_scan/connect/disconnect/status/write()` methods to `workbench_driver.py`
 - [ ] TASK-116: Update install.sh to install bleak dependency
 - [ ] TASK-117: Implement WT-1200–1207 BLE proxy test cases
 
@@ -2963,7 +2963,7 @@ Add this to /etc/rfc2217/workbench.json:
 | `99-rfc2217-hotplug.rules` | udev rules using systemd-run to invoke notify script |
 | `rfc2217-portal.service` | systemd unit for the portal |
 | `workbench.json` | Slot configuration file |
-| `esp32_workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
+| `workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
 | `test_instrument.py` | Self-tests (WT-100 through WT-1304) |
 | `cw_beacon.py` | CW beacon engine — GPCLK hardware clock + Morse keying for DF testing |

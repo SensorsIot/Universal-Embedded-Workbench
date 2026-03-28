@@ -77,7 +77,7 @@ def discover(timeout=DEFAULT_TIMEOUT):
 def write_hosts_entry(hostname, ip):
     """Add or update an /etc/hosts entry for the workbench."""
     hosts_path = "/etc/hosts"
-    marker = "# esp32-workbench-discovery"
+    marker = "# workbench-discovery"
     new_line = f"{ip}\t{hostname}\t{marker}\n"
 
     try:
@@ -118,7 +118,7 @@ def main():
         return 1
 
     for wb in results:
-        hostname = wb.get("hostname", "esp32-workbench")
+        hostname = wb.get("hostname", "workbench")
         ip = wb.get("ip", wb["source_ip"])
         fqdn = f"{hostname}.local"
 

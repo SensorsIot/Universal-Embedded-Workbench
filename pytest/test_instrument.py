@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from esp32_workbench_driver import CommandError, CommandTimeout
+from workbench_driver import CommandError, CommandTimeout
 
 # Path to pre-built debug-test firmware binaries
 DEBUG_TEST_DIR = os.path.join(

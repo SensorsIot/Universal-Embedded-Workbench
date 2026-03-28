@@ -22,11 +22,11 @@ pi/
   cw_beacon.py                # CW beacon (GPCLK Morse transmitter for DF testing)
   systemd/                    # systemd service unit
 pytest/
-  esp32_workbench_driver.py   # ESP32WorkbenchDriver class for test scripts
+  workbench_driver.py   # WorkbenchDriver class for test scripts
   conftest.py                 # pytest fixtures
   test_instrument.py          # Self-tests for the instrument
 docs/
-  Universal-ESP32-Workbench-FSD.md  # Full functional specification
+  Embedded-Workbench-FSD.md  # Full functional specification
 container/                    # Alternate devcontainer config
 skills/esp32-test-harness/    # Claude Code skill
 skills/cw-beacon/             # CW beacon skill (GPCLK Morse for DF testing)
@@ -62,7 +62,7 @@ mypy --strict .
 
 ## Specifications
 
-- `docs/Universal-ESP32-Workbench-FSD.md` -- Full functional specification (Embedded Workbench)
+- `docs/Embedded-Workbench-FSD.md` -- Full functional specification (Embedded Workbench)
 
 ## Key Conventions
 
@@ -79,7 +79,7 @@ mypy --strict .
 
 ## Gotchas / Do Not
 
-- Do NOT SSH into the Pi to interact with the workbench -- always use the HTTP API at :8080. The `ESP32WorkbenchDriver` in `pytest/esp32_workbench_driver.py` wraps all API calls. SSH is only for deploying code updates to `/usr/local/bin/rfc2217-portal`.
+- Do NOT SSH into the Pi to interact with the workbench -- always use the HTTP API at :8080. The `WorkbenchDriver` in `pytest/workbench_driver.py` wraps all API calls. SSH is only for deploying code updates to `/usr/local/bin/rfc2217-portal`.
 - Do NOT use `hard-reset` after mode with ESP32-C3 -- it gets stuck in download mode
 - udev events require `systemd-run --no-block` to reach the portal process
 - wlan0 is reserved for testing -- use eth0 (USB Ethernet) for LAN

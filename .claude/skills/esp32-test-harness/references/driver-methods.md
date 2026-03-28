@@ -1,4 +1,4 @@
-# ESP32WorkbenchDriver Methods Reference
+# WorkbenchDriver Methods Reference
 
 ## Slot state & devices
 

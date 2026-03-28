@@ -282,7 +282,7 @@ def _beacon_responder_thread():
             continue
         if text == "DISCOVER":
             response = json.dumps({
-                "service": "esp32-workbench",
+                "service": "workbench",
                 "hostname": hostname,
                 "ip": host_ip,
                 "port": PORT,

@@ -168,14 +168,14 @@ Standard test cases for ESP32 Over-The-Air firmware update functionality. Copy r
 
 ```bash
 # Upload firmware to workbench
-curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
+curl -X POST http://workbench.local:8080/api/firmware/upload \
   -F "project=my-project" -F "file=@build/firmware.bin"
 
 # Trigger OTA on device via HTTP relay
-curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
+curl -X POST http://workbench.local:8080/api/wifi/http \
   -H 'Content-Type: application/json' \
   -d '{"method":"POST","url":"http://192.168.4.2/ota","headers":{"Content-Type":"application/json"},"body":"...", "timeout":60}'
 
 # Monitor progress via UDP logs
-curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
+curl "http://workbench.local:8080/api/udplog?limit=50"
 ```

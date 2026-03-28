@@ -169,11 +169,11 @@ Standard test cases for ESP32 WiFi Access Point and captive portal provisioning.
 
 ```bash
 # Enter captive portal via workbench
-curl -X POST http://esp32-workbench.local:8080/api/wifi/enter-portal \
+curl -X POST http://workbench.local:8080/api/wifi/enter-portal \
   -H 'Content-Type: application/json' -d '{"slot": "slot-1"}'
 
 # Provision WiFi via workbench
-curl -X POST http://esp32-workbench.local:8080/api/wifi/provision \
+curl -X POST http://workbench.local:8080/api/wifi/provision \
   -H 'Content-Type: application/json' \
   -d '{"ssid": "TestNetwork", "password": "testpass123"}'
 ```

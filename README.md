@@ -27,7 +27,7 @@ That's it. The installer sets up all dependencies (pyserial, hostapd, dnsmasq, b
 3. Query the API to see what's connected:
 
 ```bash
-curl http://esp32-workbench.local:8080/api/devices | jq
+curl http://workbench.local:8080/api/devices | jq
 ```
 
 The response includes all 3 slots with serial URLs, chip info, debug status, and USB devices:
@@ -39,7 +39,7 @@ The response includes all 3 slots with serial URLs, chip info, debug status, and
       "label": "SLOT1",
       "state": "idle",
       "running": true,
-      "url": "rfc2217://esp32-workbench.local:4001?ign_set_control",
+      "url": "rfc2217://workbench.local:4001?ign_set_control",
       "detected_chip": "esp32s3",
       "debugging": true,
       "debug_chip": "esp32s3",
@@ -59,7 +59,7 @@ The response includes all 3 slots with serial URLs, chip info, debug status, and
 4. Flash firmware using the serial URL from the response:
 
 ```bash
-esptool --port "rfc2217://esp32-workbench.local:4001?ign_set_control" \
+esptool --port "rfc2217://workbench.local:4001?ign_set_control" \
   write_flash 0x0 firmware.bin
 ```
 
@@ -67,7 +67,7 @@ esptool --port "rfc2217://esp32-workbench.local:4001?ign_set_control" \
 
 ```bash
 riscv32-esp-elf-gdb build/project.elf \
-  -ex "target extended-remote esp32-workbench.local:3335" \
+  -ex "target extended-remote workbench.local:3335" \
   -ex "monitor reset halt"
 ```
 
@@ -96,7 +96,7 @@ GPIO wiring is optional. Without it, the workbench still provides serial and deb
        | eth0 (wired)
        v
   Raspberry Pi ---- wlan0 (WiFi test AP: 192.168.4.x)
-  esp32-workbench.local      hci0  (Bluetooth LE)
+  workbench.local      hci0  (Bluetooth LE)
        |             UDP :5555 (log receiver)
        | USB hub
        |
@@ -197,7 +197,7 @@ Logs are buffered (last 2000 lines) and available via the HTTP API, filterable b
 Serves firmware binaries over HTTP so ESP32 devices can perform OTA updates from the local network. Upload a `.bin` file, then point the ESP32's OTA URL to:
 
 ```
-http://esp32-workbench.local:8080/firmware/<project-name>/<filename>.bin
+http://workbench.local:8080/firmware/<project-name>/<filename>.bin
 ```
 
 ### 7. BLE Proxy
@@ -237,22 +237,22 @@ A browser-based dashboard at **http://pi-ip:8080** showing all 3 serial slots, W
 
 ```bash
 # esptool
-esptool --port "rfc2217://esp32-workbench.local:4001?ign_set_control" write_flash 0x0 firmware.bin
+esptool --port "rfc2217://workbench.local:4001?ign_set_control" write_flash 0x0 firmware.bin
 
 # ESP-IDF
-export ESPPORT="rfc2217://esp32-workbench.local:4001?ign_set_control"
+export ESPPORT="rfc2217://workbench.local:4001?ign_set_control"
 idf.py flash monitor
 
 # Python
 import serial
-ser = serial.serial_for_url("rfc2217://esp32-workbench.local:4001?ign_set_control", baudrate=115200)
+ser = serial.serial_for_url("rfc2217://workbench.local:4001?ign_set_control", baudrate=115200)
 ```
 
 ```ini
 # PlatformIO (platformio.ini)
 [env:esp32]
-upload_port = rfc2217://esp32-workbench.local:4001?ign_set_control
-monitor_port = rfc2217://esp32-workbench.local:4001?ign_set_control
+upload_port = rfc2217://workbench.local:4001?ign_set_control
+monitor_port = rfc2217://workbench.local:4001?ign_set_control
 ```
 
 ### pytest Driver
@@ -262,9 +262,9 @@ pip install -e Universal-ESP32-Workbench/pytest
 ```
 
 ```python
-from esp32_workbench_driver import ESP32WorkbenchDriver
+from workbench_driver import WorkbenchDriver
 
-ut = ESP32WorkbenchDriver("http://esp32-workbench.local:8080")
+ut = WorkbenchDriver("http://workbench.local:8080")
 
 # Serial
 ut.serial_reset("SLOT2")
@@ -320,66 +320,66 @@ ut.test_end()
 
 ```bash
 # 1. Upload firmware to the workbench
-curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
+curl -X POST http://workbench.local:8080/api/firmware/upload \
   -F "project=ios-keyboard" -F "file=@build/ios-keyboard.bin"
 
 # 2. Trigger OTA on the ESP32 via HTTP relay
-curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
+curl -X POST http://workbench.local:8080/api/wifi/http \
   -H "Content-Type: application/json" \
   -d '{"method":"POST","url":"http://192.168.4.15/ota"}'
 
 # 3. Monitor progress via UDP logs
-curl http://esp32-workbench.local:8080/api/udplog?source=192.168.4.15
+curl http://workbench.local:8080/api/udplog?source=192.168.4.15
 ```
 
 ### curl Examples
 
 ```bash
 # Check connected devices
-curl http://esp32-workbench.local:8080/api/devices | jq
+curl http://workbench.local:8080/api/devices | jq
 
 # Serial reset
-curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
+curl -X POST http://workbench.local:8080/api/serial/reset \
   -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
 
 # Start WiFi AP
-curl -X POST http://esp32-workbench.local:8080/api/wifi/ap_start \
+curl -X POST http://workbench.local:8080/api/wifi/ap_start \
   -H "Content-Type: application/json" -d '{"ssid":"TestAP","password":"secret"}'
 
 # GPIO: hold boot pin LOW, pulse reset, release
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":18,"value":0}'
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":17,"value":0}'
 sleep 0.1
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":17,"value":"z"}'
-curl -X POST http://esp32-workbench.local:8080/api/gpio/set \
+curl -X POST http://workbench.local:8080/api/gpio/set \
   -H "Content-Type: application/json" -d '{"pin":18,"value":"z"}'
 
 # Get UDP logs
-curl http://esp32-workbench.local:8080/api/udplog?source=192.168.0.121&limit=50
+curl http://workbench.local:8080/api/udplog?source=192.168.0.121&limit=50
 
 # Upload firmware
-curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
+curl -X POST http://workbench.local:8080/api/firmware/upload \
   -F "project=ios-keyboard" -F "file=@build/ios-keyboard.bin"
 
 # BLE: scan, connect, write, disconnect
-curl -X POST http://esp32-workbench.local:8080/api/ble/scan \
+curl -X POST http://workbench.local:8080/api/ble/scan \
   -H "Content-Type: application/json" -d '{"timeout":5,"name_filter":"iOS-Keyboard"}'
-curl -X POST http://esp32-workbench.local:8080/api/ble/connect \
+curl -X POST http://workbench.local:8080/api/ble/connect \
   -H "Content-Type: application/json" -d '{"address":"1C:DB:D4:84:58:CE"}'
-curl -X POST http://esp32-workbench.local:8080/api/ble/write \
+curl -X POST http://workbench.local:8080/api/ble/write \
   -H "Content-Type: application/json" \
   -d '{"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","data":"0248656c6c6f"}'
-curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
+curl -X POST http://workbench.local:8080/api/ble/disconnect
 
 # CW beacon
-curl -X POST http://esp32-workbench.local:8080/api/cw/start \
+curl -X POST http://workbench.local:8080/api/cw/start \
   -H "Content-Type: application/json" \
   -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
-curl http://esp32-workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
-curl -X POST http://esp32-workbench.local:8080/api/cw/stop
+curl http://workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
+curl -X POST http://workbench.local:8080/api/cw/stop
 ```
 
 ---
@@ -400,7 +400,7 @@ curl -X POST http://esp32-workbench.local:8080/api/cw/stop
 | GDB won't connect | OpenOCD may not have started (classic ESP32 without USB JTAG) | Check `/api/devices` for `debugging: true`. Classic ESP32 needs an ESP-Prog configured in `workbench.json` |
 | DUT not connecting to AP | Wrong WiFi credentials in DUT | Verify AP is running: `curl .../api/wifi/ap_status` |
 | BLE scan finds nothing | Bluetooth powered off | `sudo rfkill unblock bluetooth && sudo hciconfig hci0 up && sudo bluetoothctl power on` |
-| No UDP logs appearing | ESP32 not sending to correct IP/port | Verify firmware log host is `esp32-workbench.local:5555` |
+| No UDP logs appearing | ESP32 not sending to correct IP/port | Verify firmware log host is `workbench.local:5555` |
 | GPIO pin has no effect | Wrong BCM pin number or not wired | Verify wiring; only BCM pins in the allowlist work |
 
 ---
@@ -520,12 +520,12 @@ pi/
   systemd/                   Service unit file
 
 pytest/
-  esp32_workbench_driver.py  Python test driver (ESP32WorkbenchDriver class)
+  workbench_driver.py  Python test driver (WorkbenchDriver class)
   conftest.py                Fixtures and CLI options
   test_instrument.py         Self-tests for the instrument
 
 docs/
-  Universal-ESP32-Workbench-FSD.md  Full functional specification
+  Embedded-Workbench-FSD.md  Full functional specification
 ```
 
 ---

@@ -18,7 +18,7 @@ Automatically adapts to local USB or remote workbench.
 Determine whether a workbench is available or the device is local.
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/info
+curl -s http://workbench.local:8080/api/info
 ```
 
 - **Response received** → workbench available, use RFC2217 remote upload
@@ -61,21 +61,21 @@ pio run -t upload && pio device monitor # Upload and monitor
 When a workbench is available. Check the portal for slot-to-port assignments:
 
 ```bash
-curl -s http://esp32-workbench.local:8080/api/devices | jq '.slots[] | {label, url, state}'
+curl -s http://workbench.local:8080/api/devices | jq '.slots[] | {label, url, state}'
 ```
 
 ### Configure platformio.ini
 
 ```ini
-upload_port = rfc2217://esp32-workbench.local:4001?ign_set_control
-monitor_port = rfc2217://esp32-workbench.local:4001?ign_set_control
+upload_port = rfc2217://workbench.local:4001?ign_set_control
+monitor_port = rfc2217://workbench.local:4001?ign_set_control
 ```
 
 ### Or via command line
 
 ```bash
-pio run -t upload --upload-port 'rfc2217://esp32-workbench.local:4001?ign_set_control'
-pio device monitor --port 'rfc2217://esp32-workbench.local:4001?ign_set_control'
+pio run -t upload --upload-port 'rfc2217://workbench.local:4001?ign_set_control'
+pio device monitor --port 'rfc2217://workbench.local:4001?ign_set_control'
 ```
 
 ## Step 4: Monitor
@@ -85,10 +85,10 @@ pio device monitor --port 'rfc2217://esp32-workbench.local:4001?ign_set_control'
 pio device monitor
 
 # Workbench — via RFC2217
-pio device monitor --port 'rfc2217://esp32-workbench.local:4001?ign_set_control'
+pio device monitor --port 'rfc2217://workbench.local:4001?ign_set_control'
 
 # Workbench — via UDP logs (non-blocking)
-curl "http://esp32-workbench.local:8080/api/udplog?limit=50"
+curl "http://workbench.local:8080/api/udplog?limit=50"
 ```
 
 ## Boot Mode
@@ -112,6 +112,6 @@ If upload fails, put ESP32 in bootloader mode:
 
 | Issue | Solution |
 |-------|----------|
-| Connection refused | Check portal at `http://esp32-workbench.local:8080`; verify device state is `idle` |
+| Connection refused | Check portal at `http://workbench.local:8080`; verify device state is `idle` |
 | Timeout during flash | Use `--no-stub` flag; check network |
 | Port busy | Close other terminal/tool using the same RFC2217 port |

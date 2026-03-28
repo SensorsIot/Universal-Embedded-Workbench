@@ -8,7 +8,7 @@ The Pi-based WiFi Workbench uses the Pi Zero W's own wlan0 radio as a WiFi test 
 Your machine                         Pi Zero W
 ───────────                          ─────────
 pytest                               portal.py :8080
-  └─ ESP32WorkbenchDriver ──HTTP──►        └─ wifi_controller.py
+  └─ WorkbenchDriver ──HTTP──►        └─ wifi_controller.py
                                           ├─ hostapd    (AP mode)
                                           ├─ dnsmasq    (DHCP)
                                           ├─ wpa_supplicant (STA mode)
@@ -65,9 +65,9 @@ All endpoints return `{"ok": true, ...}` or `{"ok": false, "error": "message"}`.
 ## Driver Usage (Python)
 
 ```python
-from esp32_workbench_driver import ESP32WorkbenchDriver
+from workbench_driver import WorkbenchDriver
 
-wt = ESP32WorkbenchDriver("http://192.168.1.50:8080")
+wt = WorkbenchDriver("http://192.168.1.50:8080")
 wt.open()
 
 # Ping

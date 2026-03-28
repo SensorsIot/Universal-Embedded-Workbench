@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from esp32_workbench_driver import ESP32WorkbenchDriver
+from workbench_driver import WorkbenchDriver
 
 
 def pytest_addoption(parser):
@@ -54,7 +54,7 @@ def pytest_runtest_makereport(item, call):
 def workbench(request):
     """Session-scoped connection to the WiFi Tester instrument."""
     url = request.config.getoption("--wt-url")
-    driver = ESP32WorkbenchDriver(url)
+    driver = WorkbenchDriver(url)
     driver.open()
     driver.ping()
     yield driver
