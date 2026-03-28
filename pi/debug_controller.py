@@ -47,6 +47,59 @@ TAP_ID_MAP = {
     0x120034E5: "esp32s3",
 }
 
+# Auto-detect order: try most common chips first
+BUILTIN_DETECT_ORDER = ["esp32c3", "esp32s3", "esp32c6", "esp32h2"]
+PROBE_DETECT_ORDER = ["esp32", "esp32s3", "esp32c3", "esp32c6", "esp32h2", "esp32s2"]
+
+
+def detect_chip(probe: dict | None = None) -> str | None:
+    """Auto-detect chip type by trying OpenOCD configs until one succeeds.
+
+    Tries each config in sequence. OpenOCD fails fast (~1-2s) on TAP
+    mismatch, so this typically completes within a few seconds.
+
+    Args:
+        probe: Probe config dict (for ESP-Prog mode). None for USB JTAG.
+
+    Returns:
+        Chip name (e.g. "esp32c3") or None if no chip detected.
+    """
+    if probe:
+        configs = PROBE_DETECT_ORDER
+    else:
+        configs = BUILTIN_DETECT_ORDER
+
+    for chip in configs:
+        cmd = [OPENOCD_EXE, "-s", OPENOCD_SCRIPTS]
+
+        if probe:
+            # Unbind FTDI for each attempt
+            bus_port = probe.get("bus_port")
+            if bus_port:
+                _unbind_ftdi_interface(bus_port)
+            cmd += ["-f", probe["interface_config"]]
+            cmd += ["-f", PROBE_TARGET_CONFIGS[chip]]
+        else:
+            cmd += ["-f", BUILTIN_CONFIGS[chip]]
+
+        cmd += ["-c", "init", "-c", "shutdown"]
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=8)
+            output = result.stdout + result.stderr
+            if "Examination succeed" in output or "Examined" in output:
+                print(f"[debug] auto-detect: {chip} (matched)", flush=True)
+                return chip
+        except subprocess.TimeoutExpired:
+            continue
+        except Exception:
+            continue
+
+    print("[debug] auto-detect: no chip matched", flush=True)
+    return None
+
+
 # Module state
 _lock = threading.Lock()
 _sessions: dict[str, dict] = {}   # slot_label → session info
@@ -142,6 +195,15 @@ def start(slot_label: str, slot: dict, gdb_port: int, telnet_port: int,
             return {"ok": False,
                     "error": f"no device in {slot_label}"}
 
+        # Auto-detect chip if not specified
+        if not chip:
+            probe_info = _probes.get(probe) if probe else None
+            chip = detect_chip(probe_info)
+            if not chip:
+                return {"ok": False,
+                        "error": "could not auto-detect chip type — "
+                                 "specify chip manually or check JTAG wiring"}
+
         # Build OpenOCD command
         cmd = [OPENOCD_EXE, "-s", OPENOCD_SCRIPTS]
 
@@ -154,9 +216,6 @@ def start(slot_label: str, slot: dict, gdb_port: int, telnet_port: int,
                 return {"ok": False,
                         "error": f"probe '{probe}' already in use by "
                                  f"{probe_info.get('slot')}"}
-            if not chip:
-                return {"ok": False,
-                        "error": "chip type required for probe mode"}
             if chip not in PROBE_TARGET_CONFIGS:
                 return {"ok": False,
                         "error": f"unsupported chip '{chip}' for probe"}
@@ -174,10 +233,6 @@ def start(slot_label: str, slot: dict, gdb_port: int, telnet_port: int,
             probe_info["slot"] = slot_label
         else:
             # USB JTAG mode (FR-024/025)
-            if not chip:
-                return {"ok": False,
-                        "error": "chip type required (esp32c3, esp32c6, "
-                                 "esp32h2, esp32s3)"}
             if chip not in BUILTIN_CONFIGS:
                 supported = ", ".join(sorted(BUILTIN_CONFIGS.keys()))
                 return {"ok": False,
