@@ -557,6 +557,8 @@ pytest/
 
 docs/
   Universal-ESP32-Workbench-FSD.md  Full functional specification
+
+.claude/skills/                    12 Claude Code skills (project-specific)
 ```
 
 ---
@@ -567,31 +569,32 @@ The workbench comes with Claude Code skills that let an AI agent operate the wor
 
 ### Installing Skills
 
-Clone this repo into your workspace and symlink its skills into your project's `.claude/skills/` directory so Claude Code discovers them automatically:
+All skills live in `.claude/skills/` inside this repo. Claude Code reads them automatically when working in this project. To use them in another project, symlink:
 
 ```bash
+# From your project directory
 git clone https://github.com/SensorsIot/Universal-ESP32-Workbench
-mkdir -p .claude
 ln -s "$(pwd)/Universal-ESP32-Workbench/.claude/skills" .claude/skills
 ```
 
-Restart Claude Code (or run `/clear`) for the skills to take effect.
+**Note:** User-level skills (docx, github, code-reviewer, etc.) are in the separate [SensorsIot/claude](https://github.com/SensorsIot/claude) repo, installed at `~/.claude/`.
 
-### Available Skills
+### Available Skills (12)
 
 | Skill | Triggers on | Purpose |
 |-------|-------------|---------|
-| `esp-idf-handling` | flash, build, idf.py, monitor, slot, OTA, esptool | Full ESP-IDF lifecycle — auto-detects local USB vs workbench |
+| `esp-idf-handling` | flash, build, idf.py, monitor, OTA, esptool | Full ESP-IDF lifecycle — auto-detects local USB vs workbench |
 | `esp-pio-handling` | pio, platformio, pio run, pio upload | Full PlatformIO lifecycle — auto-detects local USB vs workbench |
-| `fsd-writer` | FSD, write FSD, create FSD, functional spec | FSD generation, mainly for ESP32 projects, with 9 test spec libraries |
+| `fsd-writer` | FSD, write FSD, functional spec | FSD generation with 9 test spec libraries |
+| `esp32-test-harness` | test harness, reset DUT, captive portal test | DUT test execution protocol, serial lifeline, NVS erase |
 | `workbench-integration` | integrate workbench, add testing | Adds workbench modules and testing chapters to project FSD |
-| `workbench-test-handling` | test progress, test session, operator | Test execution, progress tracking, operator interaction |
+| `workbench-test-handling` | test progress, test session, operator | Test progress tracking, human interaction requests |
 | `workbench-wifi` | wifi, AP, station, scan, provision | WiFi AP/STA, HTTP relay, captive portal provisioning |
 | `workbench-ble` | BLE, bluetooth, GATT, NUS | BLE scan, connect, GATT write |
 | `workbench-mqtt` | MQTT, broker, publish, subscribe | MQTT broker control |
 | `workbench-logging` | serial monitor, log, UDP log | Serial monitor, UDP debug logs |
-| `cw-beacon` | CW beacon, Morse, direction finder, 80m, GPCLK | GPCLK Morse transmitter for DF testing |
-| `workbench-debug` | GDB, JTAG, debug, OpenOCD, breakpoint, ESP-Prog | Remote GDB debugging via USB JTAG or ESP-Prog |
+| `workbench-debug` | GDB, JTAG, debug, OpenOCD, ESP-Prog | Remote GDB debugging via USB JTAG or ESP-Prog |
+| `cw-beacon` | CW beacon, Morse, direction finder, 80m | GPCLK Morse transmitter for DF testing |
 
 ---
 
