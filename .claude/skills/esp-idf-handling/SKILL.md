@@ -85,9 +85,13 @@ idf.py -p /dev/ttyUSB0 flash monitor   # Flash and monitor
 
 | Device | `--before` | `--after` |
 |--------|-----------|----------|
-| ESP32-S3 (ttyACM, native USB) | `usb_reset` | `hard_reset` |
-| ESP32-C3 (ttyACM, native USB) | `usb_reset` | `watchdog_reset` |
-| ESP32 (ttyUSB, UART bridge) | `default_reset` | `hard_reset` |
+| All chips (via `/api/flash`) | `default-reset` | `no-reset` |
+| ESP32 (local USB, ttyUSB) | `default-reset` | `hard-reset` |
+| ESP32-C3/S3 (local USB, ttyACM) | `default-reset` | `no-reset` |
+
+**Note:** On the workbench, use `--after no-reset` and call
+`POST /api/serial/reset` after flash to reboot the device. Stop debug
+before flashing native USB chips (serial + JTAG share USB).
 
 ### Boot mode (manual)
 
@@ -111,42 +115,30 @@ Slots are mapped to physical USB hub ports via prefix matching (configured in `w
 curl -s http://workbench.local:8080/api/devices | jq .
 ```
 
-Response fields per slot: `label`, `state`, `url` (RFC2217, auto-assigned port), `present`, `running`.
-
-### Board type detection
-
-| Present slots | Board type | How to identify |
-|---------------|------------|-----------------|
-| 1 slot | **Single-USB** | One `ttyACM`/`ttyUSB` device |
-| 2 slots (same hub parent) | **Dual-USB hub board** | Two `ttyACM` devices under a common USB hub path |
-
-**For dual-USB boards**, identify which slot is which:
-
-```bash
-ssh pi@workbench.local "udevadm info -q property /dev/ttyACM0 | grep ID_SERIAL"
-# Contains "Espressif" → JTAG slot (flash + reset here)
-# Contains "1a86", "CH340", "CP210x" → UART slot (serial console here)
-```
+Response fields per slot: `label`, `state`, `url` (RFC2217, auto-assigned port), `present`, `running`, `detected_chip`.
 
 ### Flash via RFC2217
 
-**Baud rate:** Native USB devices (ESP32-S3/C3 `ttyACM`) ignore baud rate — data
-transfers at USB speed. UART-bridge devices (`ttyUSB`) respect it. Use `-b 921600`
-as default for both.
+Flashing uses esptool from the host through the RFC2217 proxy. Binaries
+stay on the host — no SCP needed. Use `--after no-reset` to avoid USB
+re-enumeration, then reboot via the API.
+
+**Bootloader offsets:** Classic ESP32 → `0x1000`, all newer chips (C3/S3/C6/H2) → `0x0000`.
 
 ```bash
 # Get the RFC2217 URL
 SLOT_URL=$(curl -s http://workbench.local:8080/api/devices | jq -r '.slots[0].url')
 
-# Flash using build-generated flash_args (recommended)
-cd build && esptool.py --port "${SLOT_URL}?ign_set_control" \
-  --chip esp32s3 -b 921600 write_flash @flash_args
+# Flash (binaries stay on host)
+esptool --port "$SLOT_URL" --chip esp32c3 \
+  --before default-reset --after no-reset \
+  write-flash --flash-mode dio --flash-size 4MB \
+  0x0000 bootloader.bin 0x8000 partition-table.bin 0x10000 firmware.bin
 
-# Erase NVS partition
-esptool.py --port "${SLOT_URL}?ign_set_control" --chip esp32s3 erase_region 0x9000 0x6000
+# Reboot device into new firmware
+curl -X POST http://workbench.local:8080/api/serial/reset \
+  -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
 ```
-
-**For dual-USB boards:** always flash via the **JTAG slot** (not the UART slot).
 
 ### Workbench API endpoints
 
@@ -288,14 +280,10 @@ Not all boards have EN/BOOT wired to Pi GPIOs. Run once per board:
 
 ## Crash-Loop Recovery (Workbench)
 
-When firmware crashes on boot (repeated `rst:0xc (RTC_SW_CPU_RST)` with backtraces):
-
-```bash
-esptool.py --port "rfc2217://workbench.local:<PORT>?ign_set_control" \
-  --chip esp32s3 --before=usb_reset erase_flash
-```
-
-After erasing, device boots to empty flash and stops looping.
+When firmware crashes on boot (repeated `rst:0xc (RTC_SW_CPU_RST)` with backtraces),
+use the `/api/flash` endpoint to reflash working firmware. The portal handles proxy
+lifecycle safely. If the device is completely unresponsive, use GPIO download mode
+(if available) or reflash directly on the Pi with the portal stopped.
 
 ## Flapping & Automatic Recovery (Workbench)
 
@@ -359,8 +347,8 @@ curl -X POST http://workbench.local:8080/api/serial/recover \
 | `flapping` state | Recovery should start automatically; if stuck, `POST /api/serial/recover` |
 | `recovering` state | USB unbound, recovery in progress — wait for `download_mode` or `idle` |
 | `download_mode` state | Flash firmware on the Pi, then `POST /api/serial/release` |
-| esptool can't connect | Ensure slot is `idle`; for native USB use `--before=usb_reset` |
-| Device crash-looping | Erase flash with `esptool.py --before=usb_reset erase_flash` |
+| esptool can't connect | Use `POST /api/flash` — never call esptool over RFC2217 directly |
+| Device crash-looping | Reflash via `POST /api/flash` with working firmware |
 | Board occupies two slots | Onboard USB hub — identify JTAG vs UART via `udevadm info` |
 
 ### OTA

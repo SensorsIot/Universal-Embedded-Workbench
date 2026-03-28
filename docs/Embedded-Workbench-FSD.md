@@ -121,7 +121,7 @@ its own state machine.  Serial operates per slot; WiFi operates on wlan0.
 |-------|-------------|
 | Absent | No USB device in this slot |
 | Idle | Device present, proxy running, no active operation |
-| Flashing | External tool (esptool) using RFC2217 proxy — reset/monitor blocked |
+| Flashing | `POST /api/flash` in progress — proxy stopped, esptool running locally |
 | Resetting | DTR/RTS reset in progress — proxy stopped, direct serial in use |
 | Monitoring | Reading serial output for pattern matching |
 | Flapping | USB connect/disconnect cycling detected — recovery failed or pending |
@@ -135,8 +135,8 @@ State transitions:
 |------|----|---------|
 | Absent | Idle | Hotplug add + proxy start |
 | Idle | Absent | Hotplug remove |
-| Idle | Flashing | External RFC2217 client connects (esptool) |
-| Flashing | Idle | Client disconnects, proxy restarts via hotplug |
+| Idle | Flashing | `POST /api/flash` — portal stops proxy, runs esptool |
+| Flashing | Idle | Flash complete — portal restarts proxy |
 | Idle | Resetting | `POST /api/serial/reset` — stops proxy, opens direct serial, sends DTR/RTS |
 | Resetting | Idle | Reset complete, proxy restarts via hotplug |
 | Idle | Monitoring | `POST /api/serial/monitor` — reads serial via RFC2217 (non-exclusive) |
@@ -463,57 +463,45 @@ in download mode because GPIO9 is not re-sampled.
 
 #### 6.7 Flashing via RFC2217
 
-Flashing works via RFC2217 through `plain_rfc2217_server` for all device
-types.  No SSH to the Pi is needed — esptool's DTR/RTS sequences pass
-through directly.
+Flashing uses esptool from the host over the RFC2217 proxy.  Binaries
+stay on the host — no SCP or file upload needed.  After flash, the
+client calls `POST /api/serial/reset` to reboot the device.
 
-**ESP32-C3 (native USB, ttyACM):**
+**Design constraint:** The Pi Zero 2 W's `dwc_otg` USB driver crashes
+when two processes hold the same USB serial device open simultaneously.
+The portal never opens serial devices directly — only the RFC2217 proxy
+holds the serial port.  esptool connects through the proxy as a client.
 
-```bash
-python3 -m esptool --chip esp32c3 \
-  --port "rfc2217://workbench.local:4001" \
-  --before=usb-reset --after=watchdog-reset \
-  write_flash 0x10000 firmware.bin
-```
+**Flash flow:**
 
-**Classic ESP32 (UART bridge, ttyUSB):**
+1. Stop debug if active (`POST /api/debug/stop`) — native USB chips
+   share serial and JTAG on the same USB interface
+2. Run esptool from the host with `--after no-reset` (avoids USB
+   re-enumeration that crashes `dwc_otg`)
+3. Reboot device: `POST /api/serial/reset`
+4. Restart debug: `POST /api/debug/start`
 
-```bash
-python3 -m esptool --chip esp32 \
-  --port "rfc2217://workbench.local:4001" \
-  --before=default-reset --after=hard-reset \
-  write_flash 0x10000 firmware.bin
-```
+**Key esptool flags and offsets:**
 
-**Key esptool flags by device type:**
+| Device | Bootloader offset | `--before` | `--after` |
+|--------|------------------|-----------|----------|
+| ESP32 (ttyUSB) | `0x1000` | `default-reset` | `no-reset` |
+| ESP32-C3/S3/C6/H2 (ttyACM) | `0x0000` | `default-reset` | `no-reset` |
 
-| Device | `--before` | `--after` |
-|--------|-----------|----------|
-| ESP32-C3 (ttyACM, native USB) | `usb_reset` | `watchdog_reset` |
-| ESP32-S3 (ttyACM, native USB) | `usb_reset` | `hard_reset` |
-| ESP32 (ttyUSB, UART bridge) | `default_reset` | `hard_reset` |
-
-**Note:** A harmless RFC2217 parameter negotiation error may appear at the
-end of flashing — the flash and reset still complete successfully.
-
-**Recovering a crash-looping device (native USB):**
-
-When an ESP32-S3 or ESP32-C3 enters a firmware crash loop (continuous panic
-reboots with `rst:0xc`), the device keeps re-enumerating on USB.  Despite the
-crash loop, `esptool.py --before=usb_reset` can still connect during the brief
-window between reboots.  Use `erase_flash` to wipe the bad firmware and stop
-the loop:
+**Example:**
 
 ```bash
-esptool.py --port "rfc2217://workbench.local:<PORT>?ign_set_control" \
-  --chip esp32s3 --before=usb_reset erase_flash
+esptool --port rfc2217://workbench.local:4001 --chip esp32c3 \
+  --before default-reset --after no-reset \
+  write-flash --flash-mode dio --flash-size 4MB \
+  0x0000 bootloader.bin 0x8000 partition-table.bin 0x10000 firmware.bin
+
+curl -X POST http://workbench.local:8080/api/serial/reset \
+  -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
 ```
 
-After erasing, the device boots to an empty flash (prints `invalid header:
-0xffffffff` repeatedly) and is ready for a clean reflash.  A serial reset
-(`POST /api/serial/reset`) will show `rst:0x15 (USB_UART_CHIP_RESET)` with
-`boot:0x28 (SPI_FAST_FLASH_BOOT)`, confirming the device is responsive and
-USB DTR/RTS control works.
+**Note:** A harmless RFC2217 parameter negotiation error may appear at
+the end of flashing — the flash and verify still complete successfully.
 
 #### 6.8 RFC2217 Client Best Practices (ttyACM)
 
@@ -1812,16 +1800,28 @@ debug_port = workbench.local:3333
 OpenOCD starts automatically when a device is hotplugged or at boot,
 requiring zero manual configuration:
 
-- **Auto-detection sequence**: The portal tries OpenOCD configs in order
-  until one succeeds:
-  - USB JTAG: C3 → S3 → C6 → H2
-  - ESP-Prog probe: ESP32 → S3 → C3 → C6 → H2 → S2
-- **Fallback**: If USB JTAG detection fails and an ESP-Prog probe is
-  configured for the slot, the portal automatically falls back to probe-based
-  debugging.
-- **API visibility**: The `/api/devices` response includes `debugging` (bool),
-  `debug_chip` (string or null), and `debug_gdb_port` (int or null) fields
-  for each slot.
+- **Slot-aware detection**: Detection is per-DUT-slot, not global.  For each
+  DUT slot, the portal determines:
+  1. **Chip type** — which MCU is in this slot
+  2. **JTAG source** — which slot provides JTAG (own slot for built-in USB
+     JTAG, or another slot if an ESP-Prog probe is wired to the DUT)
+- **Detection sequence**: For each DUT slot:
+  1. Check the slot's own USB devices for built-in JTAG (Espressif VID `303a`
+     with "JTAG" in product name) → try `BUILTIN_CONFIGS` in order:
+     C3 → S3 → C6 → H2
+  2. If no built-in JTAG, try each available ESP-Prog probe →
+     `PROBE_TARGET_CONFIGS` in order: ESP32 → S3 → C3 → C6 → H2 → S2
+  3. If neither succeeds → no debug for this slot
+- **Probe-only slots skipped**: Slots that contain only a debug probe (FTDI
+  VID `0403`, no other USB devices) are never auto-debugged themselves.
+- **API visibility**: The `/api/devices` response includes per-slot:
+  - `detected_chip` — MCU type (e.g. `esp32s3`), persists after debug stop
+  - `jtag_slot` — slot label providing JTAG (own slot or probe's slot), or null
+  - `debugging` (bool), `debug_chip`, `debug_gdb_port` — active session info
+- **Flashing via `/api/flash`**: For native USB chips (C3/S3/C6/H2),
+  the portal stops both OpenOCD and the proxy before running esptool,
+  then restarts both.  For boards with a dedicated USB-serial chip
+  (CP2102, CH343), the serial and JTAG interfaces are independent.
 - **Flapping suppression**: Auto-debug is suppressed while a slot is in
   flapping/recovery state — OpenOCD is not started until the device stabilises.
 - **Hotplug suppression**: While debugging is active on a slot, hotplug events
@@ -2965,6 +2965,34 @@ Add this to /etc/rfc2217/workbench.json:
 | `workbench.json` | Slot configuration file |
 | `workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
-| `test_instrument.py` | Self-tests (WT-100 through WT-1304) |
+| `workbench_test.py` | End-to-end workbench tests (WT-100 through WT-1805) |
 | `cw_beacon.py` | CW beacon engine — GPCLK hardware clock + Morse keying for DF testing |
 | `debug_controller.py` | GDB debug manager — OpenOCD lifecycle, probe allocation, slot state coordination |
+
+---
+
+## Changelog
+
+### 2026-03-28 — Flash architecture, auto-detection, test progress
+
+**Flash via RFC2217 (FR-006 §6.7):**
+- Flashing uses esptool from the host over RFC2217 — binaries stay on the host
+- Uses `--after no-reset` to avoid USB re-enumeration; device rebooted via `POST /api/serial/reset`
+- Stop debug before flash on native USB chips (serial + JTAG share USB)
+- Removed `SerialReader` thread — portal never opens serial devices directly
+- Root cause: dual process access to USB serial crashes `dwc_otg` on Pi Zero 2 W
+
+**Auto-detection and OpenOCD:**
+- Boot scan auto-detects chip type via JTAG TAP ID probing
+- Auto-starts OpenOCD debug session on device plug-in
+- `detected_chip` and `jtag_slot` exposed in `/api/devices` per slot
+- Debug auto-restarts after flash without manual intervention
+
+**Test progress UI:**
+- Progress bar with percentage (`2 / 6 (33%)`) in portal web UI
+- Pass/fail/skip counters with color-coded bar (green/red)
+- Fixed `test_result` reporting (was silently failing due to parameter name mismatch)
+
+**Renames:**
+- `test_instrument.py` → `workbench_test.py`
+- `WIFI_TESTER_URL` → `WORKBENCH_URL` environment variable

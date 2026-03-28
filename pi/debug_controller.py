@@ -100,6 +100,80 @@ def detect_chip(probe: dict | None = None) -> str | None:
     return None
 
 
+# Espressif USB VID — chips with built-in USB JTAG expose this
+_ESPRESSIF_VID = "303a"
+
+
+def _slot_has_builtin_jtag(usb_devices: list[dict]) -> bool:
+    """True if any USB device on this slot is an Espressif JTAG interface."""
+    for d in usb_devices:
+        vid = d.get("vid_pid", "").split(":")[0]
+        product = d.get("product", "")
+        if vid == _ESPRESSIF_VID and "JTAG" in product:
+            return True
+    return False
+
+
+def detect_slot_jtag(
+    slot_label: str,
+    usb_devices: list[dict],
+    probe_slot_map: dict[str, str] | None = None,
+) -> dict:
+    """Detect chip type and JTAG source for a specific slot.
+
+    Checks in order:
+      1. Built-in USB JTAG on this slot (Espressif VID + JTAG product)
+      2. Each available ESP-Prog probe (verifies wiring by probing)
+      3. No JTAG available
+
+    Args:
+        slot_label: The DUT slot label (e.g. "SLOT3").
+        usb_devices: The slot's ``_usb_devices`` list from portal.
+        probe_slot_map: Maps probe label → slot label where the probe
+            lives (e.g. ``{"PROBE1": "SLOT1"}``).  Used to report the
+            JTAG source as a slot, not a probe name.
+
+    Returns:
+        ``{"chip": "esp32s3", "jtag_slot": "SLOT3"}``  — built-in JTAG
+        ``{"chip": "esp32",   "jtag_slot": "SLOT1"}``  — via probe on SLOT1
+        ``{"chip": None,      "jtag_slot": None}``     — no JTAG found
+    """
+    if probe_slot_map is None:
+        probe_slot_map = {}
+    no_jtag: dict = {"chip": None, "jtag_slot": None}
+
+    # 1. Built-in USB JTAG on this slot?
+    if _slot_has_builtin_jtag(usb_devices):
+        chip = detect_chip(probe=None)  # uses BUILTIN_CONFIGS
+        if chip:
+            print(f"[debug] {slot_label}: built-in JTAG → {chip}",
+                  flush=True)
+            return {"chip": chip, "jtag_slot": slot_label}
+        print(f"[debug] {slot_label}: has JTAG USB but detect failed",
+              flush=True)
+
+    # 2. Try each available probe
+    with _lock:
+        available = [
+            (label, dict(info))  # copy so we can release lock
+            for label, info in _probes.items()
+            if not info.get("in_use")
+        ]
+
+    for probe_label, probe_info in available:
+        chip = detect_chip(probe=probe_info)
+        if chip:
+            jtag_slot = probe_slot_map.get(probe_label, probe_label)
+            print(f"[debug] {slot_label}: probe {probe_label} "
+                  f"on {jtag_slot} → {chip}", flush=True)
+            return {"chip": chip, "jtag_slot": jtag_slot,
+                    "probe": probe_label}
+
+    # 3. Nothing worked
+    print(f"[debug] {slot_label}: no JTAG source found", flush=True)
+    return no_jtag
+
+
 # Module state
 _lock = threading.Lock()
 _sessions: dict[str, dict] = {}   # slot_label → session info

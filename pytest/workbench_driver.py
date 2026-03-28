@@ -290,6 +290,13 @@ class WorkbenchDriver:
         )
         return {k: v for k, v in result.items() if k != "ok"}
 
+    def serial_output(self, slot: str = "SLOT2",
+                      lines: int = 50, since: float = 0) -> dict:
+        """GET /api/serial/output — passive buffer read."""
+        return self._api_get(
+            f"/api/serial/output?slot={slot}&lines={lines}&since={since}"
+        )
+
     def serial_monitor(self, slot: str = "SLOT2",
                        pattern: Optional[str] = None,
                        timeout: float = 10) -> dict:

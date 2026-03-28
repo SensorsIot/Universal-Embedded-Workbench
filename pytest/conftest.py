@@ -1,4 +1,4 @@
-"""Pytest fixtures for the WiFi Tester (HTTP-only, Pi backend).
+"""Pytest fixtures for the Embedded Workbench (HTTP-only, Pi backend).
 
 Usage:
     pytest test_instrument.py --wt-url http://<pi-ip>:8080
@@ -15,8 +15,8 @@ from workbench_driver import WorkbenchDriver
 def pytest_addoption(parser):
     parser.addoption(
         "--wt-url",
-        default=os.environ.get("WIFI_TESTER_URL", "http://localhost:8080"),
-        help="Portal URL for the WiFi Tester Pi",
+        default=os.environ.get("WORKBENCH_URL", "http://localhost:8080"),
+        help="Portal URL for the Embedded Workbench Pi",
     )
     parser.addoption(
         "--run-dut",
@@ -52,7 +52,7 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(scope="session")
 def workbench(request):
-    """Session-scoped connection to the WiFi Tester instrument."""
+    """Session-scoped connection to the Embedded Workbench."""
     url = request.config.getoption("--wt-url")
     driver = WorkbenchDriver(url)
     driver.open()

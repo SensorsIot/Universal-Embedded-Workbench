@@ -220,44 +220,45 @@ if result["matched"]:
 
 ### 2.3 Flash via RFC2217
 
-Flashing uses esptool directly (not through the driver). Get `PORT` from `wt.get_slot()["url"]`:
+Flashing uses esptool from the host through the RFC2217 proxy. Binaries
+stay on the host — no SCP needed. Use `--after no-reset`, then reboot
+via the API.
 
-```bash
-# PORT from driver discovery (auto-assigned), e.g. "rfc2217://192.168.0.87:4001"
+```python
+import subprocess
 
-# ESP32-C3 (native USB)
-python3 -m esptool --chip esp32c3 \
-    --port "$PORT" \
-    --before=usb-reset --after=watchdog-reset \
-    write_flash 0x10000 firmware.bin
+# Stop debug if active (native USB shares serial + JTAG)
+wt.debug_stop(slot=SLOT)
 
-# Full flash (bootloader + partitions + firmware)
-python3 -m esptool --chip esp32c3 \
-    --port "$PORT" \
-    --baud 921600 --before=usb-reset --after=watchdog-reset \
-    write_flash --flash_mode dio --flash_size 4MB \
-    0x0000 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin
+# Get RFC2217 URL
+dev = wt.get_slot(SLOT)
+url = dev["url"]
+
+# Flash via esptool (runs on host, sends data through proxy)
+subprocess.run([
+    "python3", "-m", "esptool", "--chip", "esp32c3",
+    "--port", url, "--before", "default-reset", "--after", "no-reset",
+    "write-flash", "--flash-mode", "dio", "--flash-size", "4MB",
+    "0x0000", "bootloader.bin", "0x8000", "partition-table.bin",
+    "0x10000", "firmware.bin",
+], check=True, timeout=60)
+
+# Reboot device and restart debug
+wt.serial_reset(SLOT)
+wt.debug_start(slot=SLOT)
 ```
 
-### 2.4 Known issue: C3 stuck in download mode
-
-```bash
-python3 -m esptool --chip esp32c3 \
-    --port "$PORT" \
-    --before=usb-reset --after=watchdog-reset chip_id
-```
-
-Use `--after=watchdog-reset` (NOT `hard-reset`) — system reset re-samples GPIO9.
+**Bootloader offsets:** ESP32 classic → `0x1000`, all newer chips (C3/S3/C6/H2) → `0x0000`.
 
 ---
 
 ## 3. NVS Erase (Clean State)
 
 ```bash
-python3 -m esptool --chip esp32c3 \
-    --port "$PORT" \
-    --before=usb-reset --after=watchdog-reset \
-    erase_region 0x9000 0x5000
+# Via portal serial reset endpoint (stops proxy, opens device directly)
+curl -X POST http://workbench.local:8080/api/serial/reset \
+    -H "Content-Type: application/json" \
+    -d '{"slot":"SLOT1"}'
 ```
 
 After erase, the DUT resets and boots with:
@@ -337,13 +338,7 @@ wt.sta_leave()
 
 **Option A** — Submit WiFi credentials via portal (see 4.2).
 
-**Option B** — Erase NVS via serial (portal doesn't block serial):
-```bash
-python3 -m esptool --chip esp32c3 \
-    --port "$PORT" \
-    --before=usb-reset --after=watchdog-reset \
-    erase_region 0x9000 0x5000
-```
+**Option B** — Erase NVS via serial reset and reflash (use `/api/flash`).
 
 **Option C** — Wait for portal timeout (5 minutes), DUT reboots automatically.
 

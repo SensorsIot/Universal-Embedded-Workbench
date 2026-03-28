@@ -39,7 +39,7 @@ The response includes all 3 slots with serial URLs, chip info, debug status, and
       "label": "SLOT1",
       "state": "idle",
       "running": true,
-      "url": "rfc2217://workbench.local:4001?ign_set_control",
+      "url": "rfc2217://workbench.local:4001",
       "detected_chip": "esp32s3",
       "debugging": true,
       "debug_chip": "esp32s3",
@@ -56,11 +56,12 @@ The response includes all 3 slots with serial URLs, chip info, debug status, and
 }
 ```
 
-4. Flash firmware using the serial URL from the response:
+4. Flash firmware via RFC2217 (binaries stay on your machine):
 
 ```bash
-esptool --port "rfc2217://workbench.local:4001?ign_set_control" \
-  write_flash 0x0 firmware.bin
+esptool --port rfc2217://workbench.local:4001 --chip esp32c3 \
+  --before default-reset --after no-reset \
+  write-flash 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 firmware.bin
 ```
 
 5. Connect GDB to the auto-started OpenOCD:
@@ -233,26 +234,31 @@ A browser-based dashboard at **http://pi-ip:8080** showing all 3 serial slots, W
 
 ## Usage
 
-### Serial: Flash & Monitor
+### Flash Firmware
 
 ```bash
-# esptool
-esptool --port "rfc2217://workbench.local:4001?ign_set_control" write_flash 0x0 firmware.bin
+# Flash via RFC2217 (binaries stay on host, no SCP needed)
+esptool --port rfc2217://workbench.local:4001 --chip esp32c3 \
+  --before default-reset --after no-reset \
+  write-flash 0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 firmware.bin
 
-# ESP-IDF
-export ESPPORT="rfc2217://workbench.local:4001?ign_set_control"
-idf.py flash monitor
+# Reboot device into new firmware
+curl -X POST http://workbench.local:8080/api/serial/reset \
+  -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
+```
 
+### Serial Monitor
+
+```bash
 # Python
 import serial
-ser = serial.serial_for_url("rfc2217://workbench.local:4001?ign_set_control", baudrate=115200)
+ser = serial.serial_for_url("rfc2217://workbench.local:4001", baudrate=115200)
 ```
 
 ```ini
 # PlatformIO (platformio.ini)
 [env:esp32]
-upload_port = rfc2217://workbench.local:4001?ign_set_control
-monitor_port = rfc2217://workbench.local:4001?ign_set_control
+monitor_port = rfc2217://workbench.local:4001
 ```
 
 ### pytest Driver
@@ -264,56 +270,56 @@ pip install -e Universal-ESP32-Workbench/pytest
 ```python
 from workbench_driver import WorkbenchDriver
 
-ut = WorkbenchDriver("http://workbench.local:8080")
+wt = WorkbenchDriver("http://workbench.local:8080")
 
 # Serial
-ut.serial_reset("SLOT2")
-result = ut.serial_monitor("SLOT2", pattern="WiFi connected", timeout=30)
+wt.serial_reset("SLOT1")
+result = wt.serial_monitor("SLOT1", pattern="WiFi connected", timeout=30)
 
 # WiFi
-ut.ap_start("TestAP", "password123")
-station = ut.wait_for_station(timeout=30)
-resp = ut.http_get(f"http://{station['ip']}/api/status")
-ut.ap_stop()
+wt.ap_start("TestAP", "password123")
+station = wt.wait_for_station(timeout=30)
+resp = wt.http_get(f"http://{station['ip']}/api/status")
+wt.ap_stop()
 
 # GPIO -- trigger captive portal mode (requires wiring)
 try:
-    ut.gpio_set(18, 0)                   # Hold DUT boot pin LOW
-    ut.gpio_set(17, 0)                   # Pull EN/RST LOW (reset)
+    wt.gpio_set(18, 0)                   # Hold DUT boot pin LOW
+    wt.gpio_set(17, 0)                   # Pull EN/RST LOW (reset)
     time.sleep(0.1)
-    ut.gpio_set(17, "z")                 # Release reset -- DUT boots into portal
+    wt.gpio_set(17, "z")                 # Release reset -- DUT boots into portal
 finally:
-    ut.gpio_set(18, "z")                 # Always release boot pin
+    wt.gpio_set(18, "z")                 # Always release boot pin
 
 # GDB debug -- auto-started on plug-in, just check what's available
-status = ut.debug_status()
+status = wt.debug_status()
 
 # Optional: manually override debug (not normally needed)
-info = ut.debug_start()    # auto-detect slot + chip
-ut.debug_stop()
+info = wt.debug_start()    # auto-detect slot + chip
+wt.debug_stop()
 
 # UDP logs
-logs = ut.udplog(source="192.168.0.121")
-ut.udplog_clear()
+logs = wt.udplog(source="192.168.0.121")
+wt.udplog_clear()
 
 # OTA firmware
-ut.firmware_upload("my-project", "build/firmware.bin")
+wt.firmware_upload("my-project", "build/firmware.bin")
 
 # BLE
-devices = ut.ble_scan(name_filter="iOS-Keyboard")
-ut.ble_connect(devices[0]["address"])
-ut.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
-ut.ble_disconnect()
+devices = wt.ble_scan(name_filter="iOS-Keyboard")
+wt.ble_connect(devices[0]["address"])
+wt.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
+wt.ble_disconnect()
 
 # CW beacon
-ut.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
-ut.cw_stop()
+wt.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
+wt.cw_stop()
 
 # Test progress
-ut.test_start(spec="Firmware v2.1", phase="Integration", total=10)
-ut.test_step("TC-001", "WiFi Connect", "Joining AP...")
-ut.test_result("TC-001", "WiFi Connect", "PASS")
-ut.test_end()
+wt.test_start(spec="Firmware v2.1", phase="Integration", total=10)
+wt.test_step("TC-001", "WiFi Connect", "Joining AP...")
+wt.test_result("TC-001", "WiFi Connect", "PASS")
+wt.test_end()
 ```
 
 ### OTA Firmware Update Workflow
@@ -390,13 +396,13 @@ curl -X POST http://workbench.local:8080/api/cw/stop
 |---------|-------|-----|
 | Device not detected | Bad USB cable, unpowered hub, or device not enumerating | Try a different cable (data-capable, not charge-only). Check `lsusb` on the Pi. |
 | Connection refused on serial port | Proxy not running | Check portal at :8080; verify device shows in `/api/devices` |
-| Timeout during flash | Network latency over RFC2217 | Use `esptool --no-stub` for reliability |
+| Timeout during flash | Proxy not released | Use `POST /api/flash` — it manages proxy lifecycle |
 | Port busy | Another client connected | Close the other connection first (RFC2217 = 1 client) |
 | Stale slot data | Device was unplugged during an active debug or serial session | The workbench cleans up automatically on unplug. If stale, restart the portal: `sudo systemctl restart rfc2217-portal` |
 | USB flapping (rapid connect/disconnect) | Erased/corrupt flash, boot loop | Portal auto-recovers: unbinds USB, enters download mode via GPIO. Check slot state in `/api/devices`. Manual trigger: `POST /api/serial/recover` |
 | Slot stuck in `recovering` | Recovery thread running | Wait for `download_mode` (GPIO) or `idle` (no-GPIO). Takes 10-80s depending on retry count |
 | Slot in `download_mode` | Device waiting in bootloader | Flash firmware, then `POST /api/serial/release` to reboot |
-| ESP32-C3 stuck in download mode | DTR asserted on port open | Use `--after=watchdog-reset` with esptool, never `hard-reset` |
+| ESP32-C3 stuck in download mode | DTR asserted on port open | Use `POST /api/serial/reset` to reboot the device |
 | GDB won't connect | OpenOCD may not have started (classic ESP32 without USB JTAG) | Check `/api/devices` for `debugging: true`. Classic ESP32 needs an ESP-Prog configured in `workbench.json` |
 | DUT not connecting to AP | Wrong WiFi credentials in DUT | Verify AP is running: `curl .../api/wifi/ap_status` |
 | BLE scan finds nothing | Bluetooth powered off | `sudo rfkill unblock bluetooth && sudo hciconfig hci0 up && sudo bluetoothctl power on` |
@@ -522,7 +528,7 @@ pi/
 pytest/
   workbench_driver.py  Python test driver (WorkbenchDriver class)
   conftest.py                Fixtures and CLI options
-  test_instrument.py         Self-tests for the instrument
+  workbench_test.py          End-to-end workbench tests
 
 docs/
   Embedded-Workbench-FSD.md  Full functional specification

@@ -108,6 +108,10 @@ _beacon_shutdown = threading.Event()
 # OTA firmware repository — serve .bin files for ESP32 OTA updates
 FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", "/var/lib/rfc2217/firmware")
 
+# Serial buffer size — how many lines each slot's ring buffer keeps
+SERIAL_BUF_MAXLEN = 1000
+
+
 
 def _gpio_set(pin, value):
     """Set a GPIO pin: value=0 (low), 1 (high), or "z" (input with pull-up)."""
@@ -437,6 +441,8 @@ def _make_slot(slot_key: str, label: str = None, tcp_port: int = None,
         "_recovering": False,
         "_recover_retries": 0,
         "_auto_debug_chip": None,
+        "_jtag_slot": None,  # slot label providing JTAG (own or probe)
+        "_serial_buf": collections.deque(maxlen=SERIAL_BUF_MAXLEN),
         "_lock": threading.Lock(),
     }
 
@@ -526,6 +532,39 @@ def _is_process_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _pick_best_devnode(slot: dict) -> str:
+    """For dual-USB boards, prefer the non-JTAG devnode for the serial proxy.
+
+    When a slot has both a JTAG/serial combo device (Espressif 303a:1001)
+    and a dedicated serial chip (CH343, CP2102, etc.), the proxy should
+    use the dedicated serial chip so it doesn't conflict with OpenOCD.
+    """
+    devnodes = list(slot.get("_devnodes", {}).values())
+    if len(devnodes) <= 1:
+        return slot["devnode"]
+
+    # Check each devnode via udevadm — skip JTAG interfaces
+    non_jtag = []
+    for dn in devnodes:
+        try:
+            out = subprocess.check_output(
+                ["udevadm", "info", "-q", "property", "-n", dn],
+                text=True, timeout=3)
+            if "JTAG" in out:
+                continue
+        except Exception:
+            pass
+        non_jtag.append(dn)
+
+    if non_jtag and non_jtag[0] != slot["devnode"]:
+        label = slot.get("label", "?")
+        print(f"[portal] {label}: proxy on {non_jtag[0]} "
+              f"(non-JTAG, skip {slot['devnode']})", flush=True)
+        slot["devnode"] = non_jtag[0]
+        return non_jtag[0]
+    return slot["devnode"]
 
 
 def start_proxy(slot: dict) -> bool:
@@ -688,32 +727,45 @@ def scan_existing_devices():
                   f"on port {slot['tcp_port']}", flush=True)
             with slot["_lock"]:
                 start_proxy(slot)
-            # Auto-start debug in background (detect_chip is slow)
-            if slot["running"] and slot.get("gdb_port") and slot.get("label"):
+            # Auto-start debug in background (detection is slow)
+            if (slot["running"] and slot.get("gdb_port")
+                    and slot.get("label")):
                 def _bg_boot_debug(s=slot):
                     time.sleep(3)  # let proxy stabilize
+                    # Check after sleep — _usb_devices is populated by now
+                    if _is_probe_slot(s):
+                        return  # probe-only slot, not a DUT
                     try:
-                        chip = debug_controller.detect_chip()
-                        if chip:
+                        # Detection runs outside lock — no deadlock possible
+                        usb_devs = list(s.get("_usb_devices", []))
+                        psm = _build_probe_slot_map()
+                        info = debug_controller.detect_slot_jtag(
+                            s["label"], usb_devs, psm)
+                        chip = info["chip"]
+                        jtag_slot = info["jtag_slot"]
+                        probe = info.get("probe")  # None for built-in
+                        if chip and jtag_slot:
+                            # Ensure proxy is running (brief lock)
                             with s["_lock"]:
                                 if s["present"]:
-                                    # Restart proxy if detection killed it
                                     if not s["running"] or not _is_process_alive(s.get("pid")):
                                         start_proxy(s)
                                         time.sleep(1)
-                                    r = debug_controller.start(
-                                        s["label"], s,
-                                        s["gdb_port"],
-                                        s["openocd_telnet_port"],
-                                        chip)
-                                    if r.get("ok"):
-                                        s["_auto_debug_chip"] = chip
-                                        log_activity(
-                                            f"Auto-debug: {s['label']} "
-                                            f"({chip}) "
-                                            f"GDB:{s['gdb_port']}", "ok")
+                            # Start debug outside lock (has its own internal lock)
+                            if s["present"]:
+                                r = debug_controller.start(
+                                    s["label"], s,
+                                    s["gdb_port"],
+                                    s["openocd_telnet_port"],
+                                    chip, probe)
+                                if r.get("ok"):
+                                    s["_auto_debug_chip"] = chip
+                                    s["_jtag_slot"] = jtag_slot
+                                    log_activity(
+                                        f"Auto-debug: {s['label']} "
+                                        f"({chip}) JTAG:{jtag_slot} "
+                                        f"GDB:{s['gdb_port']}", "ok")
                         else:
-                            # Ensure proxy still alive after failed detection
                             with s["_lock"]:
                                 if (s["present"]
                                         and (not s["running"]
@@ -741,6 +793,45 @@ def _refresh_slot_health(slot: dict):
             slot["url"] = None
             slot["last_error"] = "Process died"
             slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+
+
+_PROBE_VIDS = {"0403"}  # FTDI (ESP-Prog, etc.)
+
+
+def _build_probe_slot_map() -> dict[str, str]:
+    """Map probe labels to the slot labels where the probe hardware lives.
+
+    Finds which present slot is a probe-only slot (FTDI device, no DUT)
+    and maps each configured probe to it.
+    """
+    probes = debug_controller.get_probes()
+    if not probes:
+        return {}
+    # Find all probe-only slots
+    probe_slots = [
+        s["label"] for s in slots.values()
+        if s.get("present") and _is_probe_slot(s)
+    ]
+    if not probe_slots:
+        return {}
+    # Map each probe to the first available probe slot
+    # (with one probe and one FTDI slot this is unambiguous)
+    result: dict[str, str] = {}
+    for i, p in enumerate(probes):
+        if i < len(probe_slots):
+            result[p["label"]] = probe_slots[i]
+    return result
+
+
+def _is_probe_slot(slot: dict) -> bool:
+    """True if slot contains only a debug probe (no flashable DUT)."""
+    usb_devs = slot.get("_usb_devices", [])
+    if not usb_devs:
+        return False
+    probe_devs = [d for d in usb_devs
+                  if d.get("vid_pid", "").split(":")[0] in _PROBE_VIDS]
+    return bool(probe_devs) and not any(
+        d for d in usb_devs if d not in probe_devs)
 
 
 def _scan_usb_devices(slot: dict) -> list[dict]:
@@ -806,6 +897,12 @@ def _slot_info(slot: dict) -> dict:
             slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
             print(f'[portal] {label}: flapping cleared (events aged out during poll)', flush=True)
             log_activity(f"{label}: device stabilised — flapping cleared", "ok")
+            # Restart proxy if device is present but proxy died
+            if slot["present"] and not slot["running"]:
+                def _bg_restart(s=slot):
+                    with s["_lock"]:
+                        start_proxy(s)
+                threading.Thread(target=_bg_restart, daemon=True).start()
 
     info = {k: v for k, v in slot.items() if not k.startswith("_")}
     info["recovering"] = slot["_recovering"]
@@ -822,25 +919,20 @@ def _slot_info(slot: dict) -> dict:
         info["debug_gdb_port"] = sess.get("gdb_port")
     else:
         info["debugging"] = False
-    # Always expose detected chip (persists after debug stop)
+    # Always expose detected chip and JTAG source (persist after debug stop)
     info["detected_chip"] = slot.get("_auto_debug_chip")
+    info["jtag_slot"] = slot.get("_jtag_slot")
     # Cached USB device info (updated on hotplug and boot)
     usb_devs = slot.get("_usb_devices", [])
     info["usb_devices"] = usb_devs
     # Detect debug probes and HID devices
     usb_warning = None
-    is_probe = False
-    PROBE_VIDS = {"0403"}  # FTDI (ESP-Prog, etc.)
+    is_probe = _is_probe_slot(slot)
     if usb_devs:
-        probe_devs = [d for d in usb_devs
-                      if d.get("vid_pid", "").split(":")[0] in PROBE_VIDS]
         hid_devs = [d for d in usb_devs
                      if "hid" in d.get("product", "").lower()
                      or "keyboard" in d.get("product", "").lower()
                      or "mouse" in d.get("product", "").lower()]
-        if probe_devs and not any(
-                d for d in usb_devs if d not in probe_devs):
-            is_probe = True
         if hid_devs:
             names = ", ".join(d["product"] for d in hid_devs)
             usb_warning = f"Not flashable — USB in HID mode: {names}"
@@ -902,8 +994,7 @@ def _read_serial_lines(ser, pattern: str | None, timeout: float) -> tuple[list[s
 
 def serial_reset(slot: dict) -> dict:
     """FR-008: Reset device via DTR/RTS.  Stops proxy, opens direct serial,
-    sends reset pulse, reads initial boot output, closes.  Proxy restarts
-    via hotplug re-enumeration.
+    sends reset pulse, reads initial boot output, restarts proxy.
 
     Returns {"ok": True/False, "output": [...], "error": "..."}.
     """
@@ -946,6 +1037,12 @@ def serial_reset(slot: dict) -> dict:
     lines, _ = _read_serial_lines(ser, None, timeout=5.0)
     ser.close()
 
+    # Push boot output into the ring buffer for /api/serial/output
+    now = time.time()
+    buf = slot["_serial_buf"]
+    for line in lines:
+        buf.append({"ts": now, "text": line})
+
     # Restart the proxy — DTR/RTS resets don't cause USB re-enumeration
     # (the chip reboots but ttyACM stays), so hotplug won't restart it.
     time.sleep(NATIVE_USB_BOOT_DELAY_S)
@@ -961,7 +1058,10 @@ def serial_reset(slot: dict) -> dict:
 
 def serial_monitor(slot: dict, pattern: str | None = None,
                    timeout: float = 10.0) -> dict:
-    """FR-009: Read serial output via RFC2217 proxy (non-exclusive).
+    """FR-009: Read serial output via RFC2217 proxy.
+
+    Connects to the running proxy as a client, reads lines, optionally
+    waits for a line matching *pattern*.
 
     Returns {"ok": True, "matched": True/False, "line": "...", "output": [...]}.
     """
@@ -1318,6 +1418,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/udplog":
             qs = parse_qs(parsed.query)
             self._handle_get_udplog(qs)
+        elif path == "/api/serial/output":
+            qs = parse_qs(parsed.query)
+            self._handle_serial_output(qs)
         elif path == "/api/firmware/list":
             self._handle_firmware_list()
         elif path == "/api/ble/status":
@@ -1505,18 +1608,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         # Recovery: if already flapping but not recovering, check if quiet long enough
         if slot["flapping"] and not slot["_recovering"]:
+            _cleared = False
             if len(slot["_event_times"]) < 2:
-                slot["flapping"] = False
-                slot["last_error"] = None
-                slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+                _cleared = True
                 print(f'[portal] {label}: USB flapping cleared (events aged out)', flush=True)
             else:
                 gap = slot["_event_times"][-1] - slot["_event_times"][-2]
                 if gap >= FLAP_COOLDOWN_S:
-                    slot["flapping"] = False
-                    slot["last_error"] = None
-                    slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+                    _cleared = True
                     print(f'[portal] {label}: USB flapping cleared (quiet for {gap:.0f}s)', flush=True)
+            if _cleared:
+                slot["flapping"] = False
+                slot["last_error"] = None
+                slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+                # Restart proxy if device is present but proxy died
+                if slot["present"] and not slot["running"]:
+                    def _bg_restart(s=slot, lk=lock):
+                        with lk:
+                            start_proxy(s)
+                    threading.Thread(target=_bg_restart, daemon=True).start()
 
         # Detect new flapping → active recovery
         if not slot["flapping"] and len(slot["_event_times"]) >= FLAP_THRESHOLD:
@@ -1549,6 +1659,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with lk:
                         if s["flapping"] or s["_recovering"]:
                             return  # Recovery in progress
+                        # If proxy is already running on a different devnode,
+                        # don't restart — this hotplug is for the JTAG interface
+                        # which doesn't need a proxy.
+                        if (s["running"] and s["pid"]
+                                and s["devnode"] and s["devnode"] != dn):
+                            return
                         # Stop existing proxy first if still running
                         if s["running"] and s["pid"]:
                             stop_proxy(s)
@@ -1563,33 +1679,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             s["running"] and s.get("gdb_port")
                             and s.get("label")
                             and not s["flapping"]
+                            and not _is_probe_slot(s)
                             and not debug_controller.is_debugging(s["label"]))
                         _gdb = s.get("gdb_port")
                         _tel = s.get("openocd_telnet_port")
                         _lbl = s.get("label")
-                    # Auto-start OpenOCD (outside lock — detect_chip is slow)
-                    # Wait for proxy to stabilize before probing JTAG
+                        _usb = list(s.get("_usb_devices", []))
+                    # Auto-start OpenOCD (outside lock — detection is slow)
                     if _should_debug:
                         time.sleep(3)
                         try:
-                            chip = debug_controller.detect_chip()
-                            if chip:
+                            psm = _build_probe_slot_map()
+                            info = debug_controller.detect_slot_jtag(
+                                _lbl, _usb, psm)
+                            chip = info["chip"]
+                            jtag_slot = info["jtag_slot"]
+                            probe = info.get("probe")  # None for built-in
+                            if chip and jtag_slot:
+                                # Ensure proxy is running (brief lock)
                                 with lk:
                                     if (s["present"] and not s["flapping"]):
-                                        # Restart proxy if detection killed it
                                         if not s["running"] or not _is_process_alive(s.get("pid")):
                                             start_proxy(s)
                                             time.sleep(1)
-                                        r = debug_controller.start(
-                                            _lbl, s, _gdb, _tel, chip)
-                                        if r.get("ok"):
-                                            s["_auto_debug_chip"] = chip
-                                            log_activity(
-                                                f"Auto-debug: {_lbl} ({chip}) "
-                                                f"GDB:{_gdb}", "ok")
+                                # Start debug outside lock (has its own internal lock)
+                                if s["present"] and not s["flapping"]:
+                                    r = debug_controller.start(
+                                        _lbl, s, _gdb, _tel,
+                                        chip, probe)
+                                    if r.get("ok"):
+                                        s["_auto_debug_chip"] = chip
+                                        s["_jtag_slot"] = jtag_slot
+                                        log_activity(
+                                            f"Auto-debug: {_lbl} ({chip}) "
+                                            f"JTAG:{jtag_slot} "
+                                            f"GDB:{_gdb}", "ok")
                             else:
-                                # Detection failed — ensure proxy still alive
                                 with lk:
+                                    # Store chip even without JTAG
+                                    if chip:
+                                        s["_auto_debug_chip"] = chip
                                     if (s["present"] and not s["flapping"]
                                             and (not s["running"]
                                                  or not _is_process_alive(
@@ -1598,7 +1727,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         except Exception as e:
                             print(f"[portal] auto-debug failed: {e}",
                                   flush=True)
-                            # Ensure proxy survives even if debug fails
                             with lk:
                                 if (s["present"] and not s["flapping"]
                                         and (not s["running"]
@@ -1615,6 +1743,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 slot["present"] = False
                 slot["devnode"] = None
                 slot["_auto_debug_chip"] = None
+                slot["_jtag_slot"] = None
                 if not slot["flapping"]:
                     slot["state"] = STATE_ABSENT
             else:
@@ -1626,7 +1755,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _rm_label = slot.get("label")
             if _rm_label and debug_controller.is_debugging(_rm_label):
                 debug_controller.stop(_rm_label)
-            # Stop proxy if no devnodes left or the removed one was primary
+            # Stop proxy if no devnodes left
             if slot["running"] and not slot["_devnodes"]:
                 def _bg_stop(s=slot, lk=lock):
                     with lk:
@@ -1878,6 +2007,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_activity(f"serial.reset({slot_label}) — {result.get('error', 'failed')}", "error")
         self._send_json(result)
 
+
     def _handle_serial_monitor(self):
         body = self._read_json() or {}
         slot_label = body.get("slot")
@@ -1900,6 +2030,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             log_activity(f"serial.monitor({slot_label}) — {result.get('error', 'failed')}", "error")
         self._send_json(result)
+
+    def _handle_serial_output(self, qs):
+        """GET /api/serial/output?slot=SLOT1&lines=50&since=0 — passive buffer read."""
+        slot_label = qs.get("slot", [""])[0]
+        if not slot_label:
+            self._send_json({"ok": False, "error": "missing 'slot' param"}, 400)
+            return
+        slot = _find_slot_by_label(slot_label)
+        if not slot:
+            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"})
+            return
+        max_lines = int(qs.get("lines", ["50"])[0])
+        since = float(qs.get("since", ["0"])[0])
+
+        buf = slot["_serial_buf"]
+        result = []
+        for entry in buf:
+            if entry["ts"] <= since:
+                continue
+            result.append(entry)
+            if len(result) >= max_lines:
+                break
+        self._send_json({"ok": True, "lines": result})
 
     # -- recovery handlers --
 
@@ -2720,9 +2873,12 @@ _UI_HTML = """\
         .test-section { margin: 20px 0 0; }
         .test-progress { background: #16213e; border-radius: 12px; padding: 20px; border: 2px solid #0f3460; }
         .test-header { font-size: 1.1em; color: #e0e0e0; margin-bottom: 10px; }
-        .test-bar-container { background: #333; border-radius: 4px; height: 8px; margin-bottom: 8px; }
-        .test-bar { background: #28a745; height: 100%; border-radius: 4px; transition: width 0.3s; }
-        .test-counter { color: #999; font-size: 0.9em; margin-bottom: 12px; }
+        .test-bar-container { background: #333; border-radius: 6px; height: 24px; margin-bottom: 12px; position: relative; overflow: hidden; }
+        .test-bar { background: linear-gradient(90deg, #1a6b2a, #28a745); height: 100%; border-radius: 6px; transition: width 0.5s ease; min-width: 0; }
+        .test-bar-label { position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.85em; font-weight: bold; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+        .test-counter { color: #ccc; font-size: 1.0em; margin-bottom: 12px; font-weight: bold; }
         .test-current { padding: 12px; border-radius: 6px; margin-bottom: 12px;
             background: #1a3a1a; border-left: 4px solid #28a745; }
         .test-current.manual { background: #3a2a00; border-left: 4px solid #f0a030;
@@ -2752,6 +2908,7 @@ _UI_HTML = """\
             <div class="test-header" id="test-header"></div>
             <div class="test-bar-container">
                 <div class="test-bar" id="test-bar"></div>
+                <div class="test-bar-label" id="test-bar-label"></div>
             </div>
             <div class="test-counter" id="test-counter"></div>
             <div class="test-current" id="test-current"></div>
@@ -2865,6 +3022,7 @@ function renderSlots(slots) {
                 <div>Device: <span>${s.devnode || 'None'}</span></div>
                 ${s.pid ? '<div>PID: <span>' + s.pid + '</span></div>' : ''}
                 ${s.detected_chip ? '<div>Chip: <span>' + s.detected_chip + '</span></div>' : ''}
+                ${s.detected_chip && s.jtag_slot ? '<div>JTAG: <span>' + s.jtag_slot + (s.jtag_slot === label ? ' (built-in)' : ' (probe)') + '</span></div>' : (s.detected_chip ? '<div>JTAG: <span>none</span></div>' : '')}
                 ${s.debugging ? '<div class="debug-active">Debug: <span>GDB :' + s.debug_gdb_port + '</span></div>' : (s.detected_chip ? '<div class="debug-idle">Debug: <span>idle</span></div>' : '')}
                 ${(s.usb_devices || []).map(d => '<div class="usb-device">USB: <span>' + d.product + '</span></div>').join('')}
             </div>
@@ -3043,6 +3201,7 @@ async function fetchTestProgress() {
         if (!data.active) {
             document.getElementById('test-header').textContent = 'No test session active';
             document.getElementById('test-bar').style.width = '0%';
+            document.getElementById('test-bar-label').textContent = '';
             document.getElementById('test-counter').textContent = '';
             document.getElementById('test-current').style.display = 'none';
             document.getElementById('test-results').innerHTML = '';
@@ -3051,9 +3210,23 @@ async function fetchTestProgress() {
 
         document.getElementById('test-header').textContent = data.spec + ' — ' + data.phase;
         const done = data.completed.length;
-        const pct = data.total > 0 ? (done / data.total * 100) : 0;
+        const pct = data.total > 0 ? Math.round(done / data.total * 100) : 0;
         document.getElementById('test-bar').style.width = pct + '%';
-        document.getElementById('test-counter').textContent = done + ' / ' + data.total + ' completed';
+        document.getElementById('test-bar-label').textContent = done + ' / ' + data.total + '  (' + pct + '%)';
+        const passed = data.completed.filter(r => r.result === 'PASS').length;
+        const failed = data.completed.filter(r => r.result === 'FAIL').length;
+        const skipped = data.completed.filter(r => r.result === 'SKIP').length;
+        let counterParts = [done + ' / ' + data.total + ' completed'];
+        if (passed) counterParts.push(passed + ' passed');
+        if (failed) counterParts.push(failed + ' failed');
+        if (skipped) counterParts.push(skipped + ' skipped');
+        document.getElementById('test-counter').textContent = counterParts.join(' — ');
+        const bar = document.getElementById('test-bar');
+        if (failed > 0) {
+            bar.style.background = 'linear-gradient(90deg, #8b1a1a, #dc3545)';
+        } else {
+            bar.style.background = 'linear-gradient(90deg, #1a6b2a, #28a745)';
+        }
 
         const cur = document.getElementById('test-current');
         if (data.current) {
