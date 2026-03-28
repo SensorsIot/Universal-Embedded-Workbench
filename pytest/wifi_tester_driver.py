@@ -440,28 +440,36 @@ class WiFiTesterDriver:
 
     # ── GDB debug ─────────────────────────────────────────────────────
 
-    def debug_start(self, slot: str, chip: str = None,
+    def debug_start(self, slot: str = None, chip: str = None,
                     probe: str = None) -> dict:
-        """Start OpenOCD debug session for a slot.
+        """Start OpenOCD debug session.
+
+        All parameters are optional — the workbench auto-detects the
+        slot (first present device) and chip (via JTAG TAP ID probing).
 
         Args:
-            slot: Slot label (e.g. "SLOT1").
-            chip: Chip type (esp32c3, esp32s3, etc.). Optional if auto-detect.
+            slot: Slot label. Auto-detected if omitted.
+            chip: Chip type. Auto-detected if omitted.
             probe: Probe label for ESP-Prog mode. Omit for USB JTAG.
 
         Returns:
-            dict with gdb_port, telnet_port, chip, gdb_target.
+            dict with slot, chip, gdb_port, telnet_port, gdb_target.
         """
-        body = {"slot": slot}
+        body = {}
+        if slot:
+            body["slot"] = slot
         if chip:
             body["chip"] = chip
         if probe:
             body["probe"] = probe
-        return self._api_post("/api/debug/start", body, timeout=15)
+        return self._api_post("/api/debug/start", body, timeout=45)
 
-    def debug_stop(self, slot: str) -> dict:
-        """Stop OpenOCD debug session for a slot."""
-        return self._api_post("/api/debug/stop", {"slot": slot})
+    def debug_stop(self, slot: str = None) -> dict:
+        """Stop OpenOCD debug session. Auto-finds active session if slot omitted."""
+        body = {}
+        if slot:
+            body["slot"] = slot
+        return self._api_post("/api/debug/stop", body)
 
     def debug_status(self) -> dict:
         """Get debug state for all slots."""

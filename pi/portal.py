@@ -2069,19 +2069,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # -- GDB debug handlers --
 
     def _handle_debug_start(self):
-        body = self._read_json()
-        if not body:
-            self._send_json({"ok": False, "error": "empty body"}, 400)
-            return
+        body = self._read_json() or {}
         slot_label = body.get("slot")
         chip = body.get("chip")
         probe = body.get("probe")
+
+        # Auto-find slot: pick the first present device with USB JTAG
         if not slot_label:
-            self._send_json({"ok": False, "error": "missing slot"}, 400)
-            return
+            for s in slots.values():
+                if s.get("present") and s.get("label"):
+                    slot_label = s["label"]
+                    break
+            if not slot_label:
+                self._send_json({"ok": False, "error": "no device found"}, 404)
+                return
+
         slot = _find_slot_by_label(slot_label)
         if not slot:
-            self._send_json({"ok": False, "error": "slot not found"}, 404)
+            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"}, 404)
             return
         gdb_port = slot.get("gdb_port")
         telnet_port = slot.get("openocd_telnet_port")
@@ -2103,11 +2108,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _handle_debug_stop(self):
-        body = self._read_json()
-        if not body:
-            self._send_json({"ok": False, "error": "empty body"}, 400)
-            return
-        slot_label = body.get("slot", "")
+        body = self._read_json() or {}
+        slot_label = body.get("slot")
+
+        # Auto-find: stop the first active debug session
+        if not slot_label:
+            sessions = debug_controller.status()
+            for label in sessions:
+                slot_label = label
+                break
+            if not slot_label:
+                self._send_json({"ok": True})  # nothing to stop
+                return
         result = debug_controller.stop(slot_label)
         slot = _find_slot_by_label(slot_label)
         if slot and slot["state"] == STATE_DEBUGGING:
