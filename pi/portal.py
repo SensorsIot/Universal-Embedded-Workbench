@@ -1332,13 +1332,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        # -- Early exit: if debugging, suppress proxy restarts --
-        # USB re-enumeration during JTAG reset is normal; OpenOCD handles it.
+        # -- Debugging: suppress ADD events (USB re-enum during JTAG reset)
+        # but always process REMOVE (physical unplug must be handled)
         _dbg_label = slot.get("label")
-        if (slot["state"] == STATE_DEBUGGING
+        if action == "add" and (slot["state"] == STATE_DEBUGGING
                 or (_dbg_label and debug_controller.is_debugging(_dbg_label))):
             print(
-                f"[portal] hotplug: {action} {label} suppressed (debugging)",
+                f"[portal] hotplug: add {label} suppressed (debugging)",
                 flush=True,
             )
             if devnode:
