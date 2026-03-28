@@ -1,172 +1,68 @@
 # Universal ESP32 Workbench
 
-A Raspberry Pi that turns into a complete remote test instrument for ESP32 devices. Plug your boards into its USB hub, and control everything — serial, WiFi, BLE, GPIO, firmware updates — over the network through a single HTTP API.
+**Plug in any ESP32. Serial and debug are ready instantly. No configuration needed.**
+
+A Raspberry Pi that turns into a complete remote test instrument for ESP32 devices. Plug boards into its USB hub and control everything -- serial, debug, WiFi, BLE, GPIO, firmware updates -- over the network through a single HTTP API.
+
+Zero-config by design: the workbench auto-detects every USB device, assigns a serial port, identifies the chip, and starts OpenOCD for GDB debugging. No slot files, no port mappings, no manual setup.
 
 ---
 
-## Services
+## Quick Start
 
-### 1. Remote Serial (RFC2217)
-
-Each USB port on the Pi's hub gets a **fixed TCP port**. Plug an ESP32 into port 1 and it's always reachable at `rfc2217://pi:4001`, regardless of what `/dev/ttyUSB*` name Linux assigns. Swap boards freely — the port follows the physical connector, not the device.
-
-Works with esptool, PlatformIO, ESP-IDF, and any pyserial-based tool. One client at a time per device.
-
-**What happens on plug/unplug:** udev detects the event, notifies the portal, and the RFC2217 proxy starts or stops automatically. No manual intervention needed.
-
-**ESP32 reset behavior:** The Pi can reset devices via DTR/RTS signals over the serial connection. This works differently depending on the chip:
-
-| Chip | USB Interface | Device Node | Reset Method | Caveat |
-|------|--------------|-------------|--------------|--------|
-| ESP32, ESP32-S2 | External UART bridge (CP2102, CH340) | `/dev/ttyUSB*` | DTR/RTS toggle | Reliable, no issues |
-| ESP32-C3, ESP32-S3 | Native USB-Serial/JTAG | `/dev/ttyACM*` | DTR/RTS toggle | Linux asserts DTR+RTS on port open, which puts the chip into **download mode** during early boot. The Pi adds a 2-second delay before opening the port to avoid this. |
-
-**Download mode vs normal boot:** ESP32 chips use GPIO0 (active LOW) to select boot mode. If GPIO0 is held LOW during reset, the chip enters download mode (for flashing). In normal operation GPIO0 has an internal pull-up, so the chip boots normally. The UART bridge chips (CP2102) use a capacitor-based circuit to pulse GPIO0 only during the esptool handshake — this is transparent to the user.
-
-### 2. WiFi Test Instrument
-
-The Pi's **wlan0** radio acts as a programmable WiFi access point or station, isolated from the wired LAN on eth0.
-
-- **AP mode** — start a SoftAP with any SSID/password. DUTs connect to `192.168.4.x`, Pi is at `192.168.4.1`. DHCP and DNS included.
-- **STA mode** — join a DUT's captive portal AP as a station to test provisioning flows.
-- **HTTP relay** — proxy HTTP requests through the Pi's radio to devices on its WiFi network.
-- **Scan** — list nearby WiFi networks to verify a DUT's AP is broadcasting.
-
-AP and STA are mutually exclusive — starting one stops the other.
-
-### 3. GPIO Control
-
-Drive Pi GPIO pins from test scripts to simulate button presses on the DUT. The most common use: **hold a pin LOW during reset** to force the DUT into a specific boot mode (captive portal, factory reset, etc.).
-
-**Allowed pins (BCM numbering):** 5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27
-
-**Important:** Always release pins when done by setting them to `"z"` (high-impedance input). A pin left driven LOW will prevent the DUT from booting normally.
-
-**Standard wiring:**
-
-| Pi GPIO (BCM) | Pin # | DUT Pin | Function |
-|---------------|-------|---------|----------|
-| 17 | 11 | EN/RST | Hardware reset (active LOW) |
-| 18 | 12 | GPIO0 (ESP32) / GPIO9 (ESP32-C3) | Boot mode select (active LOW → download mode) |
-| 27 | 13 | — | Spare 1 |
-| 22 | 15 | — | Spare 2 |
-
-**GPIO0 vs GPIO9:** Classic ESP32 uses GPIO0 for boot mode selection. ESP32-C3/S3 with native USB use GPIO9 instead. Both are active LOW — hold LOW during reset to enter download/portal mode.
-
-Example — trigger captive portal mode without touching the board:
-```
-1. GPIO 18 → LOW          (hold DUT boot-select pin low)
-2. GPIO 17 → LOW, wait, → "z"   (pulse EN/RST to reset DUT)
-3. DUT boots with boot pin held low → enters captive portal
-4. GPIO 18 → "z"          (release immediately)
-```
-
-### 4. UDP Log Receiver
-
-Listens on **UDP port 5555** for debug log output from ESP32 devices. This is essential when the USB port is occupied (e.g., ESP32-S3 running as USB HID keyboard) and you can't use a serial monitor.
-
-The ESP32 firmware sends `ESP_LOG` output to the Pi's IP over UDP. Logs are buffered (last 2000 lines) and available via the HTTP API, filterable by source IP and timestamp.
-
-**ESP32 side** — point your UDP logging to `esp32-workbench.local:5555` (or whatever the Pi's IP is).
-
-### 5. OTA Firmware Repository
-
-Serves firmware binaries over HTTP so ESP32 devices can perform OTA updates from the local network. No internet or GitHub access required during development.
-
-Upload a `.bin` file to the Pi, then point the ESP32's OTA URL to:
-```
-http://esp32-workbench.local:8080/firmware/<project-name>/<filename>.bin
-```
-
-Firmware is stored in `/var/lib/rfc2217/firmware/` organized by project subdirectory.
-
-### 6. BLE Proxy
-
-Uses the Pi's **onboard Bluetooth radio** to scan for, connect to, and send raw bytes to BLE peripherals. The Pi acts as a dumb BLE-to-HTTP bridge — you send hex-encoded bytes via the API, and the Pi writes them to the specified GATT characteristic.
-
-This enables remote control of BLE devices from test scripts or AI agents. For example, sending keystrokes to an ESP32 running as a BLE-USB keyboard, or triggering OTA updates via BLE command.
-
-**Limitation:** One BLE connection at a time (single radio).
-
-**Prerequisite:** Bluetooth must be powered on:
-```bash
-sudo rfkill unblock bluetooth
-sudo hciconfig hci0 up
-sudo bluetoothctl power on
-```
-
-### 7. CW Beacon (Morse Transmitter)
-
-Generates a **Morse-keyed RF carrier** on GPIO 5 (pin 29) or GPIO 6 (pin 31) using the BCM2835 hardware clock generator (GPCLK). Designed for **direction finder testing** on the 80m amateur band (3.5–4.0 MHz). No additional hardware needed — just a wire antenna on the GPIO pin.
-
-- Frequency source: PLLD (500 MHz) with integer divider — jitter-free output
-- Resolution: ~25–30 kHz steps in the 80m band (e.g. 3.571, 3.597, 3.846 MHz)
-- Morse timing: PARIS standard, configurable 1–60 WPM
-- Keying: GPIO function-select toggle (ALT0 ↔ INPUT) — no phase glitches
+### Installation
 
 ```bash
-# Start beacon at ~3.571 MHz, 12 WPM
-curl -X POST http://esp32-workbench.local:8080/api/cw/start \
-  -H "Content-Type: application/json" \
-  -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
-
-# List available frequencies
-curl http://esp32-workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
-
-# Stop
-curl -X POST http://esp32-workbench.local:8080/api/cw/stop
+git clone https://github.com/SensorsIot/Universal-ESP32-Workbench.git
+cd Universal-ESP32-Workbench/pi
+bash install.sh
 ```
 
-### 8. Remote GDB Debugging
+That's it. The installer sets up all dependencies (pyserial, hostapd, dnsmasq, bleak, esptool, OpenOCD), copies scripts to `/usr/local/bin/`, creates data directories, and starts the portal as a systemd service.
 
-Connect GDB to ESP32 devices over the network. OpenOCD runs on the Pi with direct USB access; GDB connects from containers via TCP. No USB drivers or JTAG hardware needed on the developer's machine.
+### Plug In and Go
 
-**Three approaches:**
-
-| Approach | Chips | Extra Hardware | Serial During Debug |
-|----------|-------|:-:|:-:|
-| USB JTAG | C3, C6, H2, S3 (native USB) | None | Yes |
-| Dual-USB | S3 (two USB ports) | None | Yes + app USB |
-| ESP-Prog | All variants | ESP-Prog + cable | Yes |
-
-**Verified chips (USB JTAG):**
-
-| Chip | JTAG TAP ID | OpenOCD Config |
-|------|------------|----------------|
-| ESP32-C3 | `0x00005c25` | `board/esp32c3-builtin.cfg` |
-| ESP32-C6 | `0x0000dc25` | `board/esp32c6-builtin.cfg` |
-| ESP32-H2 | `0x00010c25` | `board/esp32h2-builtin.cfg` |
-| ESP32-S3 | `0x120034e5` | `board/esp32s3-builtin.cfg` |
-
-OpenOCD starts **automatically** when a device is plugged in — no API call needed. The workbench auto-detects the chip type and exposes the GDB port in `/api/devices`. Serial and JTAG coexist on the same USB connection.
+1. Plug an ESP32 into any USB port on the Pi's hub.
+2. The workbench auto-detects it within seconds.
+3. Query the API to see what's connected:
 
 ```bash
-# Check what's connected — GDB port is ready automatically
-curl http://esp32-workbench.local:8080/api/devices | jq '.slots[] | select(.debugging) | {label, debug_chip, debug_gdb_port}'
+curl http://esp32-workbench.local:8080/api/devices | jq
+```
 
-# Connect GDB from container (example: C3)
+The response includes the auto-assigned serial URL and GDB port:
+
+```json
+{
+  "slots": [
+    {
+      "label": "SLOT1",
+      "status": "running",
+      "serial_url": "rfc2217://esp32-workbench.local:4001?ign_set_control",
+      "debug_chip": "esp32c3",
+      "debug_gdb_port": 3335,
+      "debugging": true
+    }
+  ]
+}
+```
+
+4. Flash firmware using the serial URL from the response:
+
+```bash
+esptool --port "rfc2217://esp32-workbench.local:4001?ign_set_control" \
+  write_flash 0x0 firmware.bin
+```
+
+5. Connect GDB to the auto-started OpenOCD:
+
+```bash
 riscv32-esp-elf-gdb build/project.elf \
   -ex "target extended-remote esp32-workbench.local:3335" \
   -ex "monitor reset halt"
 ```
 
-For classic ESP32 boards without USB JTAG, the workbench automatically falls back to an ESP-Prog probe if one is configured.
-
-### 9. Test Automation
-
-Two additional services support automated test workflows:
-
-- **Test progress tracking** — push live test session updates (start, step, result, end) to the web portal. Operators see a real-time progress panel without needing a terminal.
-- **Human interaction requests** — block a test script until an operator confirms a physical action (cable swap, power cycle, antenna repositioning). The web portal shows a modal with the instruction and Done/Cancel buttons.
-
-### 10. Web Portal
-
-A browser-based dashboard at **http://pi-ip:8080** showing:
-- Serial slot status (running/empty/flapping/recovering/download mode)
-- WiFi AP/STA state and connected stations
-- Activity log with color-coded entries
-- Test progress panel
-- Human interaction modal
+Everything auto-restarts after a flash -- the workbench detects the USB re-enumeration and brings serial and debug back up automatically.
 
 ---
 
@@ -178,8 +74,10 @@ A browser-based dashboard at **http://pi-ip:8080** showing:
 |-----------|---------|
 | **Raspberry Pi** (Zero W, 3, 4, or 5) | Runs the portal. Needs onboard WiFi + Bluetooth. |
 | **USB Ethernet adapter** | Wired LAN on eth0 (wlan0 is reserved for WiFi testing) |
-| **USB hub** | Connect multiple ESP32 boards (if needed) |
-| **Jumper wires** (optional) | Pi GPIO → DUT GPIO for automated boot mode control |
+| **USB hub** | Connect multiple ESP32 boards |
+| **Jumper wires** (optional) | Pi GPIO to DUT GPIO for automated boot mode / reset control |
+
+GPIO wiring is optional. Without it, the workbench still provides serial and debug for every plugged-in device. GPIO is only needed if you want scripts to reset the DUT, force download mode, or trigger captive portal boot from the Pi.
 
 ### Network Topology
 
@@ -196,7 +94,7 @@ A browser-based dashboard at **http://pi-ip:8080** showing:
   +----+----+----+
   |    |    |    |
  :4001 :4002 :4003
- SLOT1 SLOT2 SLOT3
+ auto  auto  auto
 ```
 
 eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicated to WiFi testing. They never overlap.
@@ -205,49 +103,117 @@ eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicat
 
 | Port | Protocol | Direction | Purpose |
 |------|----------|-----------|---------|
-| 8080 | TCP/HTTP | Clients → Pi | Web portal, REST API, firmware downloads |
-| 4001+ | TCP/RFC2217 | Clients → Pi | Serial connections (one per USB slot) |
-| 5555 | UDP | ESP32 → Pi | Debug log receiver |
-| 5888 | UDP | Clients ↔ Pi | Discovery beacon |
+| 8080 | TCP/HTTP | Clients -> Pi | Web portal, REST API, firmware downloads |
+| 4001+ | TCP/RFC2217 | Clients -> Pi | Serial connections (auto-assigned per device) |
+| 3335+ | TCP/GDB | Clients -> Pi | GDB connections (auto-assigned per device) |
+| 5555 | UDP | ESP32 -> Pi | Debug log receiver |
+| 5888 | UDP | Clients <-> Pi | Discovery beacon |
 
 ---
 
-## Quick Start
+## Services
 
-### Installation
+### 1. Remote Serial (RFC2217)
 
+Each USB device gets an **auto-assigned TCP port** when plugged in. The workbench tracks devices by their physical USB path, so swapping boards into the same connector keeps the same port. One client at a time per device.
+
+Works with esptool, PlatformIO, ESP-IDF, and any pyserial-based tool.
+
+**What happens on plug/unplug:** udev detects the event, notifies the portal, and the RFC2217 proxy starts or stops automatically. No manual intervention needed.
+
+**ESP32 reset behavior:**
+
+| Chip | USB Interface | Device Node | Reset Method | Caveat |
+|------|--------------|-------------|--------------|--------|
+| ESP32, ESP32-S2 | External UART bridge (CP2102, CH340) | `/dev/ttyUSB*` | DTR/RTS toggle | Reliable, no issues |
+| ESP32-C3, ESP32-S3 | Native USB-Serial/JTAG | `/dev/ttyACM*` | DTR/RTS toggle | Linux asserts DTR+RTS on port open, which puts the chip into download mode during early boot. The Pi adds a 2-second delay before opening the port to avoid this. |
+
+### 2. Remote GDB Debugging
+
+OpenOCD starts **automatically** when a device is plugged in. The workbench auto-detects the chip type and exposes the GDB port in `/api/devices`. Serial and JTAG coexist on the same USB connection.
+
+| Approach | Chips | Extra Hardware | Serial During Debug |
+|----------|-------|:-:|:-:|
+| USB JTAG (auto) | C3, C6, H2, S3 (native USB) | None | Yes |
+| Dual-USB | S3 (two USB ports) | None | Yes + app USB |
+| ESP-Prog | All variants | ESP-Prog + cable | Yes |
+
+**Verified chips (USB JTAG):**
+
+| Chip | JTAG TAP ID | OpenOCD Config |
+|------|------------|----------------|
+| ESP32-C3 | `0x00005c25` | `board/esp32c3-builtin.cfg` |
+| ESP32-C6 | `0x0000dc25` | `board/esp32c6-builtin.cfg` |
+| ESP32-H2 | `0x00010c25` | `board/esp32h2-builtin.cfg` |
+| ESP32-S3 | `0x120034e5` | `board/esp32s3-builtin.cfg` |
+
+For classic ESP32 boards without USB JTAG, the workbench automatically uses an ESP-Prog probe if one is configured in `workbench.json`.
+
+### 3. WiFi Test Instrument
+
+The Pi's **wlan0** radio acts as a programmable WiFi access point or station, isolated from the wired LAN on eth0.
+
+- **AP mode** -- start a SoftAP with any SSID/password. DUTs connect to `192.168.4.x`, Pi is at `192.168.4.1`. DHCP and DNS included.
+- **STA mode** -- join a DUT's captive portal AP as a station to test provisioning flows.
+- **HTTP relay** -- proxy HTTP requests through the Pi's radio to devices on its WiFi network.
+- **Scan** -- list nearby WiFi networks to verify a DUT's AP is broadcasting.
+
+AP and STA are mutually exclusive -- starting one stops the other.
+
+### 4. GPIO Control
+
+Drive Pi GPIO pins from test scripts to simulate button presses on the DUT. The most common use: hold a pin LOW during reset to force the DUT into a specific boot mode (captive portal, factory reset, etc.).
+
+**Allowed pins (BCM numbering):** 5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27
+
+**Important:** Always release pins when done by setting them to `"z"` (high-impedance input). A pin left driven LOW will prevent the DUT from booting normally.
+
+**Standard wiring (optional -- only if you want GPIO control):**
+
+| Pi GPIO (BCM) | Pin # | DUT Pin | Function |
+|---------------|-------|---------|----------|
+| 17 | 11 | EN/RST | Hardware reset (active LOW) |
+| 18 | 12 | GPIO0 (ESP32) / GPIO9 (ESP32-C3) | Boot mode select (active LOW = download mode) |
+| 27 | 13 | -- | Spare 1 |
+| 22 | 15 | -- | Spare 2 |
+
+### 5. UDP Log Receiver
+
+Listens on **UDP port 5555** for debug log output from ESP32 devices. Essential when the USB port is occupied (e.g., ESP32-S3 running as USB HID keyboard) and you can't use a serial monitor.
+
+Logs are buffered (last 2000 lines) and available via the HTTP API, filterable by source IP and timestamp.
+
+### 6. OTA Firmware Repository
+
+Serves firmware binaries over HTTP so ESP32 devices can perform OTA updates from the local network. Upload a `.bin` file, then point the ESP32's OTA URL to:
+
+```
+http://esp32-workbench.local:8080/firmware/<project-name>/<filename>.bin
+```
+
+### 7. BLE Proxy
+
+Uses the Pi's **onboard Bluetooth radio** to scan for, connect to, and send raw bytes to BLE peripherals. The Pi acts as a BLE-to-HTTP bridge. One BLE connection at a time.
+
+**Prerequisite:** Bluetooth must be powered on:
 ```bash
-git clone https://github.com/SensorsIot/Universal-ESP32-Workbench.git
-cd Universal-ESP32-Workbench/pi
-bash install.sh
+sudo rfkill unblock bluetooth
+sudo hciconfig hci0 up
+sudo bluetoothctl power on
 ```
 
-This installs all dependencies (pyserial, hostapd, dnsmasq, bleak, esptool), copies scripts to `/usr/local/bin/`, creates the firmware directory, and starts the portal as a systemd service.
+### 8. CW Beacon (Morse Transmitter)
 
-### Slot Configuration
+Generates a **Morse-keyed RF carrier** on GPIO 5 or GPIO 6 using the BCM2835 hardware clock generator (GPCLK). Designed for direction finder testing on the 80m amateur band (3.5-4.0 MHz). No additional hardware -- just a wire antenna on the GPIO pin.
 
-Discover which USB connector maps to which slot key:
+### 9. Test Automation
 
-```bash
-rfc2217-learn-slots     # Plug in one device at a time
-```
+- **Test progress tracking** -- push live test session updates to the web portal.
+- **Human interaction requests** -- block a test script until an operator confirms a physical action.
 
-Edit the configuration:
+### 10. Web Portal
 
-```bash
-sudo nano /etc/rfc2217/slots.json
-```
-
-```json
-{
-  "slots": [
-    {"slot_key": "platform-3f980000.usb-usb-0:1.2:1.0", "label": "ESP32-A", "tcp_port": 4001},
-    {"slot_key": "platform-3f980000.usb-usb-0:1.3:1.0", "label": "ESP32-B", "tcp_port": 4002}
-  ]
-}
-```
-
-Restart after editing: `sudo systemctl restart rfc2217-portal`
+A browser-based dashboard at **http://pi-ip:8080** showing serial slot status, WiFi state, activity log, test progress, and human interaction modal.
 
 ---
 
@@ -296,19 +262,21 @@ station = ut.wait_for_station(timeout=30)
 resp = ut.http_get(f"http://{station['ip']}/api/status")
 ut.ap_stop()
 
-# GPIO — trigger captive portal mode
+# GPIO -- trigger captive portal mode (requires wiring)
 try:
     ut.gpio_set(18, 0)                   # Hold DUT boot pin LOW
     ut.gpio_set(17, 0)                   # Pull EN/RST LOW (reset)
     time.sleep(0.1)
-    ut.gpio_set(17, "z")                 # Release reset — DUT boots into portal
+    ut.gpio_set(17, "z")                 # Release reset -- DUT boots into portal
 finally:
     ut.gpio_set(18, "z")                 # Always release boot pin
 
-# Join DUT's captive portal AP
-ut.sta_join("MyDevice-Setup", timeout=15)
-resp = ut.http_get("http://192.168.4.1/")
-ut.sta_leave()
+# GDB debug -- auto-started on plug-in, just check what's available
+status = ut.debug_status()
+
+# Optional: manually override debug (not normally needed)
+info = ut.debug_start()    # auto-detect slot + chip
+ut.debug_stop()
 
 # UDP logs
 logs = ut.udplog(source="192.168.0.121")
@@ -316,8 +284,6 @@ ut.udplog_clear()
 
 # OTA firmware
 ut.firmware_upload("my-project", "build/firmware.bin")
-files = ut.firmware_list()
-# ESP32 OTA URL: http://esp32-workbench.local:8080/firmware/my-project/firmware.bin
 
 # BLE
 devices = ut.ble_scan(name_filter="iOS-Keyboard")
@@ -325,15 +291,8 @@ ut.ble_connect(devices[0]["address"])
 ut.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
 ut.ble_disconnect()
 
-# GDB debug — auto-started, just check status
-status = ut.debug_status()
-# Or manually control:
-info = ut.debug_start()    # auto-detect slot + chip
-ut.debug_stop()
-
-# CW beacon — direction finder test signal
+# CW beacon
 ut.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
-status = ut.cw_status()   # check if active
 ut.cw_stop()
 
 # Test progress
@@ -345,38 +304,26 @@ ut.test_end()
 
 ### OTA Firmware Update Workflow
 
-The workbench provides a complete end-to-end OTA workflow for ESP32 devices connected via its WiFi AP:
-
 ```bash
-# 1. Upload firmware to the workbench's OTA repository
+# 1. Upload firmware to the workbench
 curl -X POST http://esp32-workbench.local:8080/api/firmware/upload \
   -F "project=ios-keyboard" -F "file=@build/ios-keyboard.bin"
 
-# 2. Verify the firmware is downloadable
-#    (ESP32 will fetch from this URL during OTA)
-curl -o /dev/null -w "%{http_code}" \
-  http://esp32-workbench.local:8080/firmware/ios-keyboard/ios-keyboard.bin
-
-# 3. Trigger OTA on the ESP32 via HTTP relay
-#    (the ESP32 must expose a /ota endpoint and be connected to the workbench's AP)
+# 2. Trigger OTA on the ESP32 via HTTP relay
 curl -X POST http://esp32-workbench.local:8080/api/wifi/http \
   -H "Content-Type: application/json" \
   -d '{"method":"POST","url":"http://192.168.4.15/ota"}'
 
-# 4. Monitor progress via UDP logs
+# 3. Monitor progress via UDP logs
 curl http://esp32-workbench.local:8080/api/udplog?source=192.168.4.15
 ```
-
-The ESP32 device must:
-- Be connected to the workbench's WiFi AP (e.g. via `POST /api/enter-portal`)
-- Have an HTTP server with a `POST /ota` endpoint that triggers `esp_ota_ops`
-- Configure its OTA URL to `http://esp32-workbench.local:8080/firmware/<project>/<file>.bin`
-
-The workbench's HTTP relay (`POST /api/wifi/http`) bridges the gap between the LAN network and the WiFi AP network, allowing remote triggering of OTA from any client on the LAN.
 
 ### curl Examples
 
 ```bash
+# Check connected devices
+curl http://esp32-workbench.local:8080/api/devices | jq
+
 # Serial reset
 curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
   -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
@@ -412,6 +359,13 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/write \
   -H "Content-Type: application/json" \
   -d '{"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","data":"0248656c6c6f"}'
 curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
+
+# CW beacon
+curl -X POST http://esp32-workbench.local:8080/api/cw/start \
+  -H "Content-Type: application/json" \
+  -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
+curl http://esp32-workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
+curl -X POST http://esp32-workbench.local:8080/api/cw/stop
 ```
 
 ---
@@ -420,17 +374,19 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Connection refused on serial port | Proxy not running | Check portal at :8080; verify device is plugged in |
+| Device not detected | Bad USB cable, unpowered hub, or device not enumerating | Try a different cable (data-capable, not charge-only). Check `lsusb` on the Pi. |
+| Connection refused on serial port | Proxy not running | Check portal at :8080; verify device shows in `/api/devices` |
 | Timeout during flash | Network latency over RFC2217 | Use `esptool --no-stub` for reliability |
 | Port busy | Another client connected | Close the other connection first (RFC2217 = 1 client) |
+| Stale slot data | Device was unplugged during an active debug or serial session | The workbench cleans up automatically on unplug. If stale, restart the portal: `sudo systemctl restart rfc2217-portal` |
 | USB flapping (rapid connect/disconnect) | Erased/corrupt flash, boot loop | Portal auto-recovers: unbinds USB, enters download mode via GPIO. Check slot state in `/api/devices`. Manual trigger: `POST /api/serial/recover` |
 | Slot stuck in `recovering` | Recovery thread running | Wait for `download_mode` (GPIO) or `idle` (no-GPIO). Takes 10-80s depending on retry count |
-| Slot in `download_mode` | Device waiting in bootloader | Flash firmware on Pi, then `POST /api/serial/release` to reboot |
+| Slot in `download_mode` | Device waiting in bootloader | Flash firmware, then `POST /api/serial/release` to reboot |
 | ESP32-C3 stuck in download mode | DTR asserted on port open | Use `--after=watchdog-reset` with esptool, never `hard-reset` |
+| GDB won't connect | OpenOCD may not have started (classic ESP32 without USB JTAG) | Check `/api/devices` for `debugging: true`. Classic ESP32 needs an ESP-Prog configured in `workbench.json` |
 | DUT not connecting to AP | Wrong WiFi credentials in DUT | Verify AP is running: `curl .../api/wifi/ap_status` |
 | BLE scan finds nothing | Bluetooth powered off | `sudo rfkill unblock bluetooth && sudo hciconfig hci0 up && sudo bluetoothctl power on` |
 | No UDP logs appearing | ESP32 not sending to correct IP/port | Verify firmware log host is `esp32-workbench.local:5555` |
-| Firmware download returns 404 | Wrong path or not uploaded | Check `curl .../api/firmware/list` |
 | GPIO pin has no effect | Wrong BCM pin number or not wired | Verify wiring; only BCM pins in the allowlist work |
 
 ---
@@ -441,8 +397,8 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/devices` | List all slots with status |
-| GET | `/api/info` | Pi IP, hostname, slot counts |
+| GET | `/api/devices` | List all devices with status, serial URLs, and debug ports |
+| GET | `/api/info` | Pi IP, hostname, device counts |
 | POST | `/api/hotplug` | Receive udev hotplug event (internal) |
 | POST | `/api/start` | Manually start proxy for a slot |
 | POST | `/api/stop` | Manually stop proxy for a slot |
@@ -504,8 +460,8 @@ curl -X POST http://esp32-workbench.local:8080/api/ble/disconnect
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/debug/start` | Start OpenOCD `{"slot", "chip?", "probe?"}` |
-| POST | `/api/debug/stop` | Stop OpenOCD `{"slot"}` |
+| POST | `/api/debug/start` | Override: manually start OpenOCD `{"slot", "chip?", "probe?"}` |
+| POST | `/api/debug/stop` | Override: manually stop OpenOCD `{"slot"}` |
 | GET | `/api/debug/status` | Debug state for all slots |
 | GET | `/api/debug/group` | Slot groups and roles (dual-USB) |
 | GET | `/api/debug/probes` | Available debug probes (ESP-Prog) |
@@ -544,57 +500,54 @@ pi/
   debug_controller.py        GDB debug manager (OpenOCD lifecycle, probe allocation)
   plain_rfc2217_server.py    RFC2217 serial proxy with DTR/RTS passthrough
   install.sh                 One-command installer
-  rfc2217-learn-slots        Slot discovery helper
-  config/slots.json          USB slot → TCP port mapping
+  config/workbench.json      Optional hardware config (GPIO pins, debug probes)
   scripts/                   udev and dnsmasq callback scripts
   udev/                      Hotplug rules
   systemd/                   Service unit file
 
 pytest/
-  esp32_workbench_driver.py      Python test driver (ESP32WorkbenchDriver class)
+  esp32_workbench_driver.py  Python test driver (ESP32WorkbenchDriver class)
   conftest.py                Fixtures and CLI options
   test_instrument.py         Self-tests for the instrument
 
 docs/
   Universal-ESP32-Workbench-FSD.md  Full functional specification
-
-.claude/skills/                    12 Claude Code skills (project-specific)
 ```
 
 ---
 
-## Claude Code Skills
+## Configuration Reference: workbench.json
 
-The workbench comes with Claude Code skills that let an AI agent operate the workbench via curl. Each skill covers one domain and includes endpoints, curl examples, prerequisites, and troubleshooting.
+The config file at `/etc/rfc2217/workbench.json` is **optional**. The workbench works fully without it -- devices are auto-detected, serial ports auto-assigned, and USB JTAG debug auto-started.
 
-### Installing Skills
+You only need `workbench.json` if you have:
+- GPIO wires connecting Pi pins to DUT EN/BOOT (for scripted reset/boot-mode control)
+- An ESP-Prog probe (for debugging classic ESP32 boards without USB JTAG)
 
-All skills live in `.claude/skills/` inside this repo. Claude Code reads them automatically when working in this project. To use them in another project, symlink:
-
-```bash
-# From your project directory
-git clone https://github.com/SensorsIot/Universal-ESP32-Workbench
-ln -s "$(pwd)/Universal-ESP32-Workbench/.claude/skills" .claude/skills
+```json
+{
+  "gpio_boot": 18,
+  "gpio_en": 17,
+  "debug_probes": [
+    {
+      "label": "PROBE1",
+      "type": "esp-prog",
+      "interface_config": "interface/ftdi/esp_ftdi.cfg",
+      "bus_port": "1-1.4:1.0"
+    }
+  ]
+}
 ```
 
-**Note:** User-level skills (docx, github, code-reviewer, etc.) are in the separate [SensorsIot/claude](https://github.com/SensorsIot/claude) repo, installed at `~/.claude/`.
-
-### Available Skills (12)
-
-| Skill | Triggers on | Purpose |
-|-------|-------------|---------|
-| `esp-idf-handling` | flash, build, idf.py, monitor, OTA, esptool | Full ESP-IDF lifecycle — auto-detects local USB vs workbench |
-| `esp-pio-handling` | pio, platformio, pio run, pio upload | Full PlatformIO lifecycle — auto-detects local USB vs workbench |
-| `fsd-writer` | FSD, write FSD, functional spec | FSD generation with 9 test spec libraries |
-| `esp32-test-harness` | test harness, reset DUT, captive portal test | DUT test execution protocol, serial lifeline, NVS erase |
-| `workbench-integration` | integrate workbench, add testing | Adds workbench modules and testing chapters to project FSD |
-| `workbench-test-handling` | test progress, test session, operator | Test progress tracking, human interaction requests |
-| `workbench-wifi` | wifi, AP, station, scan, provision | WiFi AP/STA, HTTP relay, captive portal provisioning |
-| `workbench-ble` | BLE, bluetooth, GATT, NUS | BLE scan, connect, GATT write |
-| `workbench-mqtt` | MQTT, broker, publish, subscribe | MQTT broker control |
-| `workbench-logging` | serial monitor, log, UDP log | Serial monitor, UDP debug logs |
-| `workbench-debug` | GDB, JTAG, debug, OpenOCD, ESP-Prog | Remote GDB debugging via USB JTAG or ESP-Prog |
-| `cw-beacon` | CW beacon, Morse, direction finder, 80m | GPCLK Morse transmitter for DF testing |
+| Field | Type | Description |
+|-------|------|-------------|
+| `gpio_boot` | int or null | Pi BCM GPIO pin wired to DUT BOOT/GPIO0/GPIO9. Omit if not wired. |
+| `gpio_en` | int or null | Pi BCM GPIO pin wired to DUT EN/RST. Omit if not wired. |
+| `debug_probes` | array | ESP-Prog probe definitions. Omit or leave empty if using USB JTAG only. |
+| `debug_probes[].label` | string | Human-readable probe name |
+| `debug_probes[].type` | string | Probe type (`"esp-prog"`) |
+| `debug_probes[].interface_config` | string | OpenOCD interface config file |
+| `debug_probes[].bus_port` | string | USB bus-port path to identify the probe |
 
 ---
 

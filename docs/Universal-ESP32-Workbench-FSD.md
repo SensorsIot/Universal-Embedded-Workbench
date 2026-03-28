@@ -103,7 +103,7 @@ Mode is switched via `POST /api/wifi/mode` or the web UI toggle.
 | wifi-lease-notify.sh | /usr/local/bin/wifi-lease-notify.sh | Posts dnsmasq DHCP lease events to portal API |
 | rfc2217-learn-slots | /usr/local/bin/rfc2217-learn-slots | Slot configuration helper |
 | 99-rfc2217-hotplug.rules | /etc/udev/rules.d/ | udev rules for hotplug |
-| slots.json | /etc/rfc2217/slots.json | Slot-to-port mapping |
+| workbench.json | /etc/rfc2217/workbench.json | Hardware config (GPIO pins, debug probes) — optional |
 | esp32_workbench_driver.py | pytest/ | HTTP test driver for the WiFi instrument |
 | conftest.py | pytest/ | Pytest fixtures and CLI options |
 | test_instrument.py | pytest/ | WiFi workbench self-tests (WT-xxx) |
@@ -234,9 +234,11 @@ configured slot.
 
 ### FR-002 — Slot Configuration
 
+**Note (v8.3):** Static slot configuration is no longer required. All USB serial devices are auto-discovered and auto-assigned labels, TCP ports, and GDB ports. The workbench.json file is only needed for GPIO pin assignments and ESP-Prog probe definitions.
+
 Static configuration maps `slot_key` → `{label, tcp_port}`.
 
-Configuration file: `/etc/rfc2217/slots.json`
+Configuration file: `/etc/rfc2217/workbench.json`
 
 ```json
 {
@@ -613,7 +615,7 @@ remove event from interfering with recovery state.
 #### 7.3 Recovery — GPIO Path
 
 For slots with `gpio_boot` and optionally `gpio_en` configured in
-`slots.json`, the portal performs automatic GPIO-based recovery:
+`workbench.json`, the portal performs automatic GPIO-based recovery:
 
 1. Wait `FLAP_COOLDOWN_S` (10s) for hardware to settle
 2. Hold BOOT/GPIO0 LOW via `gpio_boot` pin (forces download mode)
@@ -1580,7 +1582,7 @@ claims both FTDI channels and channel A must be explicitly unbound.
 | OPENOCD_TELNET_BASE | 4444 | `OPENOCD_TELNET_BASE` | First OpenOCD telnet port |
 | OPENOCD_EXE | `/usr/local/bin/openocd-esp32` | `OPENOCD_EXE` | Path to esp-openocd binary |
 
-**Slot configuration** (`slots.json` extension):
+**Slot configuration** (`workbench.json` extension):
 ```json
 {
   "slots": [
@@ -2532,6 +2534,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 7.0 | 2026-02-25 | Claude | Three new services: UDP log receiver (FR-020) for ESP32 remote debug logs on port 5555; OTA firmware repository (FR-021) for serving .bin files to ESP32 OTA clients; BLE proxy (FR-022) for scan/connect/write to BLE peripherals via HTTP API using bleak. New deliverable: `ble_controller.py`. WT-1000–1207 test cases |
 | 7.1 | 2026-03-15 | Claude | Hostname renamed Serial1 → esp32-workbench; all references updated to esp32-workbench.local. UDP discovery beacon added to portal.py (port 5888) — containers can discover the workbench automatically. Skills consolidated from 14 → 9: merged flash skills into `esp-idf-handling` (auto-detects local vs workbench), PIO skills into `esp-pio-handling`, FSD + WiFi tests into `fsd-writer` with 9 test spec libraries (WiFi, captive portal, MQTT, BLE, OTA, USB HID, NVS, watchdog, logging). Removed `esp32-` prefix from workbench service skills. `fsd-writer` renamed from `esp32-fsd-writer` to be project-agnostic |
 | 8.1 | 2026-03-28 | Claude | Auto-debug: OpenOCD starts automatically on hotplug/boot with chip auto-detection (C3/S3/C6/H2 via USB JTAG, classic ESP32 via ESP-Prog fallback). Debug status in /api/devices. Hotplug suppression during active debug. Zero-config: just plug in any ESP32. WT-1700–1709 test cases. TASK-160–166 |
+| 8.3 | 2026-03-28 | Claude | Auto-discovery: fully plug-and-play slot management. No slots.json needed — devices auto-assigned labels (AUTO-1, AUTO-2), TCP ports (4001+), GDB ports (3333+). Renamed slots.json to workbench.json (hardware config only). Remove hotplug events processed during debugging (unplug detection fix). End-to-end verified: plug→flash→debug with zero configuration |
 | 8.2 | 2026-03-28 | Claude | JTAG-based reset and recovery: `/api/serial/reset` auto-selects JTAG reset when debug session is active (no USB re-enumeration, no flapping risk). Flapping recovery via JTAG halt when available. Skills updated with JTAG reset documentation |
 | 8.0 | 2026-03-27 | Claude | Remote GDB debugging — three variants: FR-024 USB JTAG (C3/S3 single-port, OpenOCD via built-in USB-Serial/JTAG), FR-025 Dual-USB (S3 two-port, serial+JTAG+app USB simultaneously), FR-026 ESP-Prog (external FT2232H probe for all ESP32 variants including classic). New `Debugging` slot state, `debug_controller.py` module, 5 API endpoints, slot groups for dual-USB, probe allocation for ESP-Prog. WT-1400–1605 test cases (18 tests). TASK-130–155 |
 | 7.2 | 2026-03-27 | Claude | CW beacon (FR-023): Morse-keyed RF carrier via BCM2835 GPCLK hardware on GPIO 5/6 for direction finder testing; PLLD 500 MHz integer divider for jitter-free 80m band output; PARIS-standard Morse timing 1–60 WPM; cw_beacon.py module; 4 API endpoints; driver methods cw_start/stop/status/frequencies; WT-1300–1304 test cases |
@@ -2731,6 +2734,8 @@ WantedBy=multi-user.target
 
 ## Appendix B: Slot Learning Workflow
 
+**Note (v8.3):** The rfc2217-learn-slots tool is no longer required for basic operation. Devices are auto-detected on plug-in. This tool is only useful for identifying physical hub port topology.
+
 ### B.1 Tool: rfc2217-learn-slots
 
 ```bash
@@ -2743,13 +2748,13 @@ Detected device:
   DEVPATH:  /devices/platform/scb/fd500000.pcie/.../ttyACM0
   BY-PATH:  /dev/serial/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.3:1.0
 
-Add this to /etc/rfc2217/slots.json:
+Add this to /etc/rfc2217/workbench.json:
   {"label": "SLOT?", "slot_key": "platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.3:1.0", "tcp_port": 400?}
 ```
 
 ### B.2 Initial Setup Procedure
 
-1. Start with empty `slots.json`
+1. Start with empty `workbench.json`
 2. Plug device into first hub connector
 3. Run `rfc2217-learn-slots`, note the `ID_PATH`
 4. Add to config as SLOT1 with `tcp_port: 4001`
@@ -2876,19 +2881,19 @@ Add this to /etc/rfc2217/slots.json:
 - [x] TASK-132: Implement `POST /api/debug/start` and `POST /api/debug/stop`
 - [x] TASK-133: Implement `GET /api/debug/status`
 - [x] TASK-134: Suppress hotplug proxy restarts during `Debugging` state
-- [x] TASK-135: Add `gdb_port` and `openocd_telnet_port` to slots.json schema
+- [x] TASK-135: Add `gdb_port` and `openocd_telnet_port` to workbench.json schema
 - [x] TASK-136: Add `debug_start/stop/status()` methods to driver
 - [ ] TASK-137: Implement WT-1400–1406 USB JTAG debug test cases
 
 **GDB Debug: Dual-USB (v8.0):**
-- [x] TASK-140: Implement slot grouping (`group` and `role` fields in slots.json)
+- [x] TASK-140: Implement slot grouping (`group` and `role` fields in workbench.json)
 - [x] TASK-141: Implement `GET /api/debug/group` endpoint
 - [x] TASK-142: Allow OpenOCD + RFC2217 to coexist on `debug`-role slots
 - [x] TASK-143: Add `debug_groups()` method to driver
 - [ ] TASK-144: Implement WT-1500–1503 Dual-USB debug test cases
 
 **GDB Debug: ESP-Prog (v8.0):**
-- [x] TASK-150: Add `debug_probes` configuration to slots.json
+- [x] TASK-150: Add `debug_probes` configuration to workbench.json
 - [x] TASK-151: Implement probe discovery and allocation
 - [x] TASK-152: Implement `GET /api/debug/probes` endpoint
 - [x] TASK-153: OpenOCD launch with FTDI interface config
@@ -2908,7 +2913,7 @@ Add this to /etc/rfc2217/slots.json:
 | `rfc2217-learn-slots` | CLI tool to discover slot_key for physical connectors |
 | `99-rfc2217-hotplug.rules` | udev rules using systemd-run to invoke notify script |
 | `rfc2217-portal.service` | systemd unit for the portal |
-| `slots.json` | Slot configuration file |
+| `workbench.json` | Slot configuration file |
 | `esp32_workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
 | `test_instrument.py` | Self-tests (WT-100 through WT-1304) |

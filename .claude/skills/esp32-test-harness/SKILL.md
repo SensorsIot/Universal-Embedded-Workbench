@@ -75,7 +75,7 @@ wt.test_end()
 | DUT WiFi (portal) | 192.168.4.1 | DUT in captive portal AP mode |
 | MQTT broker | 192.168.4.1:1883 | Mosquitto on Pi (via WiFi Tester AP) |
 
-Slots are tied to physical USB connectors on the Pi, not to devices. **Always discover the DUT slot at runtime** using `wt.get_devices()` — never hardcode a slot label or port number.
+Slots are auto-discovered from USB hotplug events (configured in `workbench.json`). **Always discover the DUT slot at runtime** using `wt.get_devices()` -- never hardcode a slot label or port number. Slot labels and RFC2217 ports are assigned dynamically.
 
 ### MQTT Broker (mosquitto on Pi)
 
@@ -150,8 +150,8 @@ wt = WiFiTesterDriver('http://192.168.0.87:8080')
 # Find which slot has a device present
 devices = wt.get_devices()
 dut = next(s for s in devices if s["present"])
-SLOT = dut["label"]       # e.g. "SLOT1", "SLOT2", "SLOT3"
-PORT = dut["url"]         # e.g. "$PORT"
+SLOT = dut["label"]       # e.g. "slot-1", "slot-2", "slot-3" (auto-discovered)
+PORT = dut["url"]         # e.g. "rfc2217://192.168.0.87:4001" (auto-assigned port)
 ```
 
 ### Driver Methods Reference
@@ -223,7 +223,7 @@ if result["matched"]:
 Flashing uses esptool directly (not through the driver). Get `PORT` from `wt.get_slot()["url"]`:
 
 ```bash
-# PORT from driver discovery, e.g. "rfc2217://192.168.0.87:4002"
+# PORT from driver discovery (auto-assigned), e.g. "rfc2217://192.168.0.87:4001"
 
 # ESP32-C3 (native USB)
 python3 -m esptool --chip esp32c3 \

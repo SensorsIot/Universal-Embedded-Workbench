@@ -43,7 +43,7 @@ curl http://esp32-workbench.local:8080/api/devices
 # Look for: "debugging": true, "debug_chip": "esp32s3", "debug_gdb_port": 3335
 ```
 
-**Manual override still works:**
+**Manual override (optional -- only needed to force-stop or force-start):**
 ```bash
 # Force stop (won't auto-restart until next hotplug)
 curl -X POST http://esp32-workbench.local:8080/api/debug/stop -d '{}'
@@ -82,7 +82,7 @@ echo "reset halt" | nc 192.168.0.87 4446
 ```bash
 # Uses JTAG reset when debug session is active, DTR/RTS otherwise
 curl -X POST http://esp32-workbench.local:8080/api/serial/reset \
-  -H "Content-Type: application/json" -d '{"slot": "SLOT1"}'
+  -H "Content-Type: application/json" -d '{"slot": "slot-1"}'
 ```
 
 **Availability:**
@@ -259,7 +259,8 @@ power-on, the chip configures 1.8V flash (crashes on 3.3V boards).
 
 **Fix:** Burn `VDD_SDIO` eFuse to force 3.3V:
 ```bash
-espefuse.py --port rfc2217://192.168.0.87:4001 set_flash_voltage 3.3V
+## Port is auto-assigned — read it from /api/devices (the "url" field)
+espefuse.py --port rfc2217://192.168.0.87:<PORT> set_flash_voltage 3.3V
 ```
 
 ---
@@ -318,7 +319,7 @@ debug_port = 192.168.0.87:3333
 These endpoints are specified in the FSD (FR-024/025/026) but not yet
 implemented in portal.py.
 
-**Note:** `POST /api/debug/start` and `POST /api/debug/stop` accept an empty body `{}`. The workbench auto-detects slot, chip, and probe. All parameters are optional overrides.
+**Note:** `POST /api/debug/start` and `POST /api/debug/stop` are optional overrides -- OpenOCD starts automatically when a device is plugged in. No API call is needed for normal use. All parameters are optional; the workbench auto-detects slot, chip, and probe.
 
 ---
 

@@ -105,11 +105,13 @@ When a workbench is available. Use serial flashing when:
 
 ### Discover devices and slot
 
+Slots are auto-discovered from USB hotplug events. The RFC2217 port is assigned dynamically -- always read it from `/api/devices`, never hardcode a port number.
+
 ```bash
 curl -s http://esp32-workbench.local:8080/api/devices | jq .
 ```
 
-Response fields per slot: `label`, `state`, `url` (RFC2217), `present`, `running`.
+Response fields per slot: `label`, `state`, `url` (RFC2217, auto-assigned port), `present`, `running`.
 
 ### Board type detection
 
@@ -153,8 +155,8 @@ esptool.py --port "${SLOT_URL}?ign_set_control" --chip esp32s3 erase_region 0x90
 | GET | `/api/devices` | List all slots with state, device node, RFC2217 URL |
 | GET | `/api/info` | System info (host IP, hostname, slot counts) |
 | POST | `/api/serial/reset` | Hardware reset via DTR/RTS pulse, returns boot output |
-| POST | `/api/serial/recover` | Manual flap recovery trigger `{"slot": "SLOT1"}` |
-| POST | `/api/serial/release` | Release GPIO after flashing, reboot into firmware `{"slot": "SLOT1"}` |
+| POST | `/api/serial/recover` | Manual flap recovery trigger `{"slot": "slot-1"}` |
+| POST | `/api/serial/release` | Release GPIO after flashing, reboot into firmware `{"slot": "slot-1"}` |
 
 ### Serial reset
 
@@ -321,7 +323,7 @@ Then release GPIO:
 
 ```bash
 curl -X POST http://esp32-workbench.local:8080/api/serial/release \
-  -H 'Content-Type: application/json' -d '{"slot": "SLOT1"}'
+  -H 'Content-Type: application/json' -d '{"slot": "slot-1"}'
 ```
 
 ### Without GPIO
@@ -336,7 +338,7 @@ After 2 failed attempts, flash directly on the Pi with `esptool --before=usb_res
 
 ```bash
 curl -X POST http://esp32-workbench.local:8080/api/serial/recover \
-  -H 'Content-Type: application/json' -d '{"slot": "SLOT1"}'
+  -H 'Content-Type: application/json' -d '{"slot": "slot-1"}'
 ```
 
 ## Troubleshooting
