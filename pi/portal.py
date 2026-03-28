@@ -2143,20 +2143,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         chip = body.get("chip")
         probe = body.get("probe")
 
-        # Auto-find slot: pick the first present device
+        # Auto-find slot: pick the first present device (configured or dynamic)
+        slot = None
         if not slot_label:
             for s in slots.values():
-                if s.get("present") and s.get("label"):
-                    slot_label = s["label"]
+                if s.get("present"):
+                    slot = s
+                    slot_label = s.get("label") or s.get("slot_key", "")[-20:]
                     break
-            if not slot_label:
+            if not slot:
                 self._send_json({"ok": False, "error": "no device found"}, 404)
                 return
-
-        slot = _find_slot_by_label(slot_label)
-        if not slot:
-            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"}, 404)
-            return
+        else:
+            slot = _find_slot_by_label(slot_label)
+            if not slot:
+                self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"}, 404)
+                return
         gdb_port = slot.get("gdb_port")
         telnet_port = slot.get("openocd_telnet_port")
         if not gdb_port:
