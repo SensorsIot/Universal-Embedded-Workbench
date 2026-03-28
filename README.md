@@ -15,7 +15,7 @@ Zero-config by design: the portal pre-creates 3 fixed slots (SLOT1--SLOT3) at bo
 ```bash
 git clone https://github.com/SensorsIot/Universal-ESP32-Workbench.git
 cd Universal-ESP32-Workbench/pi
-bash install.sh
+sudo bash install.sh
 ```
 
 That's it. The installer sets up all dependencies (pyserial, hostapd, dnsmasq, bleak, esptool, OpenOCD), copies scripts to `/usr/local/bin/`, creates data directories, and starts the portal as a systemd service.
