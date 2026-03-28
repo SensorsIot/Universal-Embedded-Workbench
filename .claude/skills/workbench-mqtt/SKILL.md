@@ -1,6 +1,6 @@
 ---
 name: workbench-mqtt
-description: MQTT broker control on the Universal ESP32 Workbench. Start and stop the broker for testing ESP32 MQTT clients. Triggers on "MQTT", "broker", "mosquitto", "pub", "sub", "publish", "subscribe".
+description: Use this skill whenever tests involve MQTT communication — starting/stopping the mosquitto broker on the workbench Pi, publishing test messages, subscribing to topics, or verifying ESP32 MQTT client behavior. The broker runs on the Pi's WiFi AP network (192.168.4.1:1883) so DUTs can reach it without internet. Use for MQTT integration tests, pub/sub verification, and broker lifecycle management. Triggers on "MQTT", "broker", "mosquitto", "publish", "subscribe", "topic", "MQTT test".
 ---
 
 # ESP32 MQTT Broker

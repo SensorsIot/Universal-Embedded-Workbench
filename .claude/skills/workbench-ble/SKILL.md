@@ -1,6 +1,6 @@
 ---
 name: workbench-ble
-description: Bluetooth LE scanning, connecting, and GATT writes via the Universal ESP32 Workbench. Triggers on "BLE", "bluetooth", "GATT", "NUS", "Nordic UART".
+description: Use this skill whenever the user needs to interact with BLE peripherals through the workbench — scanning for devices, connecting by address, writing to GATT characteristics, or checking connection status. The Pi acts as a BLE-to-HTTP bridge using bleak. Also use when sending keystrokes to BLE HID devices, triggering OTA via BLE commands, or debugging BLE connectivity. Triggers on "BLE", "bluetooth", "GATT", "NUS", "Nordic UART", "BLE scan", "BLE write", "BLE connect".
 ---
 
 # ESP32 Bluetooth LE Proxy

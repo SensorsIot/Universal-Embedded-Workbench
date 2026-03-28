@@ -1,6 +1,6 @@
 ---
 name: workbench-test-handling
-description: Test automation support — test progress tracking, human interaction requests, and activity log. Triggers on "test progress", "test session", "human interaction", "operator", "activity log", "test tracking".
+description: Use this skill whenever running automated tests that need progress tracking on the Pi's web UI, or when a test step requires physical operator action (button press, cable swap, power cycle). Covers test session lifecycle (start/step/result/end), human interaction requests with blocking modal on the Pi display, and activity log queries. Use for any test workflow that an operator needs to follow visually. Triggers on "test progress", "test session", "human interaction", "operator", "activity log", "test tracking", "test panel".
 ---
 
 # ESP32 Test Automation

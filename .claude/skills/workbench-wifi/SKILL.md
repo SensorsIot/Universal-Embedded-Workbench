@@ -1,6 +1,6 @@
 ---
 name: workbench-wifi
-description: WiFi AP/STA control, scanning, WiFi on/off testing, HTTP relay, and captive portal provisioning for the Universal ESP32 Workbench. Triggers on "wifi", "AP", "station", "scan", "provision", "captive portal", "enter-portal", "HTTP relay", "wifi testing".
+description: Use this skill whenever you need to control the workbench's WiFi radio for testing — starting a SoftAP for DUTs to connect to, joining a DUT's captive portal as a station, scanning for networks, relaying HTTP requests to devices on the WiFi network, or provisioning DUT WiFi credentials. Essential for any test that involves WiFi connectivity, captive portal flows, or HTTP communication with devices on the isolated test network (192.168.4.x). Triggers on "wifi", "AP", "station", "scan", "provision", "captive portal", "enter-portal", "HTTP relay", "wifi test", "SoftAP".
 ---
 
 # ESP32 WiFi & Provisioning

@@ -1,6 +1,6 @@
 ---
 name: workbench-logging
-description: Serial monitor and UDP debug log retrieval from ESP32 devices. Covers pattern matching, boot capture, crash output, and runtime logging. Triggers on "serial monitor", "log", "debug log", "UDP log", "boot output", "crash", "monitor", "pattern".
+description: Use this skill whenever you need to read serial output or debug logs from ESP32 devices on the workbench. Covers serial monitor with pattern matching (wait for boot messages, WiFi connected, crash dumps), UDP debug log retrieval when USB is occupied (e.g. HID keyboard), boot capture, and crash analysis. Use for verifying firmware started correctly, checking WiFi connection status, or diagnosing boot loops. Triggers on "serial monitor", "log", "debug log", "UDP log", "boot output", "crash", "monitor", "pattern", "serial output".
 ---
 
 # ESP32 Debug Logging
