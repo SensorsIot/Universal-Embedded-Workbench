@@ -2808,11 +2808,11 @@ Add this to /etc/rfc2217/slots.json:
 - [ ] TASK-144: Implement WT-1500–1503 Dual-USB debug test cases
 
 **GDB Debug: ESP-Prog (v8.0):**
-- [ ] TASK-150: Add `debug_probes` configuration to slots.json
-- [ ] TASK-151: Implement probe discovery and allocation
-- [ ] TASK-152: Implement `GET /api/debug/probes` endpoint
-- [ ] TASK-153: OpenOCD launch with FTDI interface config
-- [ ] TASK-154: Add `debug_probes()` method to driver
+- [x] TASK-150: Add `debug_probes` configuration to slots.json
+- [x] TASK-151: Implement probe discovery and allocation
+- [x] TASK-152: Implement `GET /api/debug/probes` endpoint
+- [x] TASK-153: OpenOCD launch with FTDI interface config
+- [x] TASK-154: Add `debug_probes()` method to driver
 - [ ] TASK-155: Implement WT-1600–1605 ESP-Prog debug test cases
 
 ### C.2 Deliverables

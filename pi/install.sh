@@ -86,6 +86,7 @@ cp "$SCRIPT_DIR/plain_rfc2217_server.py"    /usr/local/bin/plain_rfc2217_server.
 cp "$SCRIPT_DIR/wifi_controller.py"         /usr/local/bin/wifi_controller.py
 cp "$SCRIPT_DIR/ble_controller.py"          /usr/local/bin/ble_controller.py
 cp "$SCRIPT_DIR/cw_beacon.py"              /usr/local/bin/cw_beacon.py
+cp "$SCRIPT_DIR/debug_controller.py"       /usr/local/bin/debug_controller.py
 cp "$SCRIPT_DIR/mqtt_controller.py"         /usr/local/bin/mqtt_controller.py
 cp "$SCRIPT_DIR/sniffer.py"                 /usr/local/bin/sniffer.py
 cp "$SCRIPT_DIR/rfc2217-learn-slots"        /usr/local/bin/rfc2217-learn-slots

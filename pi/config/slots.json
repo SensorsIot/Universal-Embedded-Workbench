@@ -1,7 +1,10 @@
 {
   "slots": [
-    {"label": "SLOT1", "slot_key": "platform-3f980000.usb-usb-0:1.1:1.0", "tcp_port": 4001, "gpio_boot": 18, "gpio_en": 17},
-    {"label": "SLOT2", "slot_key": "platform-3f980000.usb-usb-0:1.3:1.0", "tcp_port": 4002},
-    {"label": "SLOT3", "slot_key": "platform-3f980000.usb-usb-0:1.4:1.0", "tcp_port": 4003}
+    {"label": "SLOT1", "slot_key": "platform-3f980000.usb-usb-0:1.1:1.0", "tcp_port": 4001, "gdb_port": 3333, "openocd_telnet_port": 4444, "gpio_boot": 18, "gpio_en": 17},
+    {"label": "SLOT2", "slot_key": "platform-3f980000.usb-usb-0:1.3:1.0", "tcp_port": 4002, "gdb_port": 3334, "openocd_telnet_port": 4445},
+    {"label": "SLOT3", "slot_key": "platform-3f980000.usb-usb-0:1.4:1.0", "tcp_port": 4003, "gdb_port": 3335, "openocd_telnet_port": 4446}
+  ],
+  "debug_probes": [
+    {"label": "PROBE1", "type": "esp-prog", "interface_config": "interface/ftdi/esp_ftdi.cfg", "bus_port": "1-1.4:1.0"}
   ]
 }
