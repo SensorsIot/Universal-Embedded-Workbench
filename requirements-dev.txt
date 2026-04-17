@@ -1,5 +1,6 @@
 # Runtime dependencies
 pyserial>=3.5
+smbus2>=0.4.2         # Si5351 clock generator (I2C) for signal_generator
 
 # Development tools
 pytest>=7.4.0

@@ -93,6 +93,16 @@ GPIO_ALLOWED = {5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}  #
 # CW beacon (GPCLK hardware clock generator + Morse keying)
 _cw_beacon = CWBeacon()
 
+# Unified signal generator (Si5351 / PE4302 with GPCLK fallback)
+try:
+    from signal_generator import SignalGenerator
+    _siggen: "SignalGenerator | None" = SignalGenerator()
+    print(f"[siggen] hardware: {_siggen.hardware_status()}, "
+          f"backends: {_siggen.available_backends()}", flush=True)
+except Exception as _siggen_exc:  # pragma: no cover
+    print(f"[siggen] disabled: {_siggen_exc}", flush=True)
+    _siggen = None
+
 # UDP log receiver — ESP32 devices send debug logs over UDP to port 5555
 UDP_LOG_PORT = int(os.environ.get("UDP_LOG_PORT", "5555"))
 UDP_LOG_MAX_LINES = 2000
@@ -1415,6 +1425,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/cw/frequencies":
             qs = parse_qs(parsed.query)
             self._handle_cw_frequencies(qs)
+        elif path == "/api/siggen/status":
+            self._handle_siggen_status()
+        elif path == "/api/siggen/frequencies":
+            qs = parse_qs(parsed.query)
+            self._handle_siggen_frequencies(qs)
         elif path == "/api/udplog":
             qs = parse_qs(parsed.query)
             self._handle_get_udplog(qs)
@@ -1483,6 +1498,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_cw_start()
         elif path == "/api/cw/stop":
             self._handle_cw_stop()
+        elif path == "/api/siggen/start":
+            self._handle_siggen_start()
+        elif path == "/api/siggen/stop":
+            self._handle_siggen_stop()
+        elif path == "/api/siggen/freq":
+            self._handle_siggen_freq()
+        elif path == "/api/siggen/atten":
+            self._handle_siggen_atten()
         elif path == "/api/firmware/upload":
             self._handle_firmware_upload()
         elif path == "/api/ble/scan":
@@ -2686,6 +2709,89 @@ class Handler(http.server.BaseHTTPRequestHandler):
         freqs = _cw_beacon.list_frequencies(low, high)
         self._send_json({"ok": True, "frequencies": freqs})
 
+    # -- signal generator handlers (Si5351 + PE4302 with GPCLK fallback) --
+
+    def _siggen_unavailable(self):
+        self._send_json(
+            {"ok": False, "error": "signal generator not available"}, 503)
+
+    def _handle_siggen_start(self):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        body = self._read_json()
+        if not body:
+            return self._send_json({"ok": False, "error": "empty body"}, 400)
+        freq = body.get("freq_hz") or body.get("freq")
+        if freq is None:
+            return self._send_json({"ok": False, "error": "missing freq_hz"}, 400)
+        try:
+            state = _siggen.start(
+                freq_hz=float(freq),
+                backend=body.get("backend", "auto"),
+                channel=body.get("channel"),
+                pin=body.get("pin"),
+                atten_db=body.get("atten_db"),
+                morse=body.get("morse"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        log_activity(
+            f"siggen started: {state['backend']} @ {state['freq_hz']:.0f} Hz", "ok")
+        self._send_json({"ok": True, **state})
+
+    def _handle_siggen_stop(self):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        state = _siggen.stop()
+        log_activity("siggen stopped", "info")
+        self._send_json({"ok": True, **state})
+
+    def _handle_siggen_status(self):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        self._send_json({"ok": True, **_siggen.status()})
+
+    def _handle_siggen_freq(self):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        body = self._read_json()
+        if not body:
+            return self._send_json({"ok": False, "error": "empty body"}, 400)
+        freq = body.get("freq_hz") or body.get("freq")
+        if freq is None:
+            return self._send_json({"ok": False, "error": "missing freq_hz"}, 400)
+        try:
+            state = _siggen.set_frequency(float(freq), channel=body.get("channel"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, **state})
+
+    def _handle_siggen_atten(self):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        body = self._read_json()
+        if not body:
+            return self._send_json({"ok": False, "error": "empty body"}, 400)
+        db = body.get("db")
+        if db is None:
+            return self._send_json({"ok": False, "error": "missing db"}, 400)
+        try:
+            state = _siggen.set_attenuation(float(db))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, **state})
+
+    def _handle_siggen_frequencies(self, qs):
+        if _siggen is None:
+            return self._siggen_unavailable()
+        low = float(qs.get("low", [3_500_000])[0])
+        high = float(qs.get("high", [4_000_000])[0])
+        backend = qs.get("backend", ["auto"])[0]
+        try:
+            freqs = _siggen.list_frequencies(low, high, backend=backend)
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, "frequencies": freqs})
+
     def _serve_ui(self):
         html = _UI_HTML
         body = html.encode()
@@ -3305,6 +3411,8 @@ def main():
         print("[portal] shutting down", flush=True)
         debug_controller.shutdown()
         _cw_beacon.shutdown()
+        if _siggen is not None:
+            _siggen.shutdown()
         _udp_shutdown.set()
         _beacon_shutdown.set()
         wifi_controller.shutdown()

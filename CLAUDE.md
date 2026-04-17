@@ -19,7 +19,13 @@ pi/
   install.sh                  # Pi installer
   config/slots.json           # Slot-to-port mapping
   udev/                       # udev rules for hotplug
-  cw_beacon.py                # CW beacon (GPCLK Morse transmitter for DF testing)
+  cw_beacon.py                # CW beacon — compat shim over signal_generator (GPCLK backend)
+  signal_generator.py         # Unified RF source: Si5351 (I2C) with GPCLK fallback + optional PE4302 attenuator
+  si5351.py                   # Si5351A I2C clock generator driver
+  pe4302.py                   # PE4302 3-wire serial step attenuator driver
+  gpclk.py                    # BCM2835/7 GPCLK hardware clock (GPIO 5/6)
+  morse.py                    # Backend-agnostic Morse keyer
+  bcm_gpio.py                 # Shared /dev/mem GPIO primitives
   systemd/                    # systemd service unit
 pytest/
   workbench_driver.py   # WorkbenchDriver class for test scripts

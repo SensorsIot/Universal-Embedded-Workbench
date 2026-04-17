@@ -30,7 +30,12 @@ if [ "$UPDATE_ONLY" = false ]; then
         bluetooth bluez
 
     # Python packages not available via apt
-    pip3 install esptool bleak --break-system-packages 2>/dev/null || true
+    pip3 install esptool bleak smbus2 --break-system-packages 2>/dev/null || true
+
+    # Enable I2C for Si5351 signal generator
+    if command -v raspi-config >/dev/null 2>&1; then
+        raspi-config nonint do_i2c 0 2>/dev/null || true
+    fi
 
     # OpenOCD for ESP32 (GDB debug support)
     if ! command -v openocd-esp32 >/dev/null 2>&1; then
@@ -86,6 +91,12 @@ cp "$SCRIPT_DIR/plain_rfc2217_server.py"    /usr/local/bin/plain_rfc2217_server.
 cp "$SCRIPT_DIR/wifi_controller.py"         /usr/local/bin/wifi_controller.py
 cp "$SCRIPT_DIR/ble_controller.py"          /usr/local/bin/ble_controller.py
 cp "$SCRIPT_DIR/cw_beacon.py"              /usr/local/bin/cw_beacon.py
+cp "$SCRIPT_DIR/bcm_gpio.py"                /usr/local/bin/bcm_gpio.py
+cp "$SCRIPT_DIR/gpclk.py"                   /usr/local/bin/gpclk.py
+cp "$SCRIPT_DIR/morse.py"                   /usr/local/bin/morse.py
+cp "$SCRIPT_DIR/si5351.py"                  /usr/local/bin/si5351.py
+cp "$SCRIPT_DIR/pe4302.py"                  /usr/local/bin/pe4302.py
+cp "$SCRIPT_DIR/signal_generator.py"        /usr/local/bin/signal_generator.py
 cp "$SCRIPT_DIR/debug_controller.py"       /usr/local/bin/debug_controller.py
 cp "$SCRIPT_DIR/mqtt_controller.py"         /usr/local/bin/mqtt_controller.py
 cp "$SCRIPT_DIR/sniffer.py"                 /usr/local/bin/sniffer.py
@@ -113,6 +124,13 @@ if [ ! -f /etc/rfc2217/workbench.json ]; then
     cp "$SCRIPT_DIR/config/workbench.json" /etc/rfc2217/workbench.json
 else
     echo "Slot config already exists, skipping..."
+fi
+
+if [ ! -f /etc/rfc2217/signalgen.json ]; then
+    echo "Installing default signal generator config..."
+    cp "$SCRIPT_DIR/config/signalgen.json" /etc/rfc2217/signalgen.json
+else
+    echo "Signal generator config already exists, skipping..."
 fi
 
 # Mosquitto test broker config
