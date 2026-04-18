@@ -40,7 +40,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "si5351": {"bus": 1, "address": 0x60, "default_channel": 0},
     "gpclk": {"default_pin": 5},
     "pe4302": {
-        "enabled": False,
+        "enabled": True,
         "data_pin": 16,
         "clk_pin": 20,
         "le_pin": 21,
