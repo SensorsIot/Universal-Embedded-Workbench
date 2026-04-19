@@ -68,7 +68,7 @@ esptool --port rfc2217://workbench.local:4001 --chip esp32c3 \
 
 ```bash
 riscv32-esp-elf-gdb build/project.elf \
-  -ex "target extended-remote workbench.local:3335" \
+  -ex "target extended-remote workbench.local:3333" \
   -ex "monitor reset halt"
 ```
 
@@ -126,7 +126,8 @@ eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicat
 |------|----------|-----------|---------|
 | 8080 | TCP/HTTP | Clients -> Pi | Web portal, REST API, firmware downloads |
 | 4001+ | TCP/RFC2217 | Clients -> Pi | Serial connections (auto-assigned per device) |
-| 3335+ | TCP/GDB | Clients -> Pi | GDB connections (auto-assigned per device) |
+| 3334+ | TCP/GDB | Clients -> Pi | GDB connections (`3333 + slot_index`) |
+| 4444+ | TCP/telnet | Clients -> Pi | OpenOCD telnet (`4443 + slot_index`) |
 | 5555 | UDP | ESP32 -> Pi | Debug log receiver |
 | 5888 | UDP | Clients <-> Pi | Discovery beacon |
 
@@ -726,9 +727,21 @@ docs/
 
 ---
 
-## Configuration Reference: workbench.json
+## Configuration Reference: workbench.json (optional)
 
-The config file at `/etc/rfc2217/workbench.json` maps physical USB hub ports to fixed slot labels and assigns GPIO pins and debug probes.
+Slots are **auto-detected** on startup — no config file is required. Only create `/etc/rfc2217/workbench.json` if you want to:
+- Rename slots (e.g., `"OLED Test Jig"` instead of `"SLOT1"`)
+- Force specific TCP/GDB ports
+- Wire GPIO boot/reset pins for download-mode recovery
+- Register an ESP-Prog debug probe
+
+Use `rfc2217-learn-slots` to print a ready-to-paste config based on currently plugged devices:
+
+```bash
+ssh pi@workbench.local sudo rfc2217-learn-slots
+```
+
+Example:
 
 ```json
 {
@@ -747,19 +760,16 @@ The config file at `/etc/rfc2217/workbench.json` maps physical USB hub ports to 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `gpio_boot` | int or null | Pi BCM GPIO pin wired to DUT BOOT/GPIO0/GPIO9. Omit if not wired. |
-| `gpio_en` | int or null | Pi BCM GPIO pin wired to DUT EN/RST. Omit if not wired. |
-| `slots` | array | Fixed slot definitions mapping USB hub ports to labels and network ports. |
-| `slots[].label` | string | Slot name shown in UI (e.g., `"SLOT1"`) |
-| `slots[].usb_prefix` | string | USB path prefix from udev `ID_PATH` (e.g., `"0:1.1"` matches `0:1.1:1.0` and `0:1.1.4:1.0`). Discover with `udevadm info -q property -n /dev/ttyACMx`. |
-| `slots[].tcp_port` | int | RFC2217 TCP port for this slot |
-| `slots[].gdb_port` | int | GDB port for OpenOCD |
-| `slots[].openocd_telnet_port` | int | OpenOCD telnet port |
-| `debug_probes` | array | ESP-Prog probe definitions. Omit or leave empty if using USB JTAG only. |
-| `debug_probes[].label` | string | Human-readable probe name |
-| `debug_probes[].type` | string | Probe type (`"esp-prog"`) |
-| `debug_probes[].interface_config` | string | OpenOCD interface config file |
-| `debug_probes[].bus_port` | string | USB bus-port path to identify the probe |
+| `gpio_boot` | int | Pi BCM GPIO wired to DUT BOOT/GPIO0/GPIO9. Omit if not wired. |
+| `gpio_en` | int | Pi BCM GPIO wired to DUT EN/RST. Omit if not wired. |
+| `slots[].label` | string | Slot name shown in UI |
+| `slots[].usb_prefix` | string | USB path prefix (e.g. `"0:1.1"` matches hub port 1). Auto-detected if omitted. |
+| `slots[].tcp_port` | int | RFC2217 TCP port. Defaults to `4000 + slot_index`. |
+| `slots[].gdb_port` | int | OpenOCD GDB port. Defaults to `3332 + slot_index`. |
+| `slots[].openocd_telnet_port` | int | OpenOCD telnet port. Defaults to `4443 + slot_index`. |
+| `debug_probes[]` | array | ESP-Prog/FT2232H probe definitions. Omit if using USB JTAG only. |
+
+**Separate config for the signal generator** lives at `/etc/rfc2217/signalgen.json` (I²C bus, PE4302 pins, Si5351 address). Defaults match the wiring documented in Service 8 — edit only if you wired things differently.
 
 ---
 
