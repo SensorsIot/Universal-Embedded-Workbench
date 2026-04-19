@@ -468,110 +468,227 @@ curl -X POST http://workbench.local:8080/api/siggen/stop
 
 ## API Reference
 
-### Serial
+All endpoints are served from `http://<pi-ip>:8080`. No authentication. All requests and responses use JSON (except the firmware upload/download which use multipart form-data and raw binary). Every response includes an `"ok": true|false` field; errors add `"error": "..."`.
+
+Sub-chapters:
+[1. Device Discovery](#1-device-discovery) · [2. Serial Management](#2-serial-management) · [3. GDB Debug](#3-gdb-debug) · [4. WiFi Instrument](#4-wifi-instrument) · [5. BLE Proxy](#5-ble-proxy) · [6. GPIO Control](#6-gpio-control) · [7. UDP Log](#7-udp-log) · [8. Firmware Repository](#8-firmware-repository) · [9. Signal Generator](#9-signal-generator) · [10. Test Progress](#10-test-progress) · [11. Human Interaction](#11-human-interaction) · [12. Activity Log](#12-activity-log)
+
+---
+
+### 1. Device Discovery
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/devices` | List all devices with status, serial URLs, and debug ports |
-| GET | `/api/info` | Pi IP, hostname, device counts |
-| POST | `/api/hotplug` | Receive udev hotplug event (internal) |
+| GET | `/api/devices` | List all slots with status, RFC2217 URL, detected chip, debug port, USB device info |
+| GET | `/api/info` | Pi IP, hostname, total slot count, portal uptime |
+
+**GET /api/devices** response:
+
+```json
+{
+  "slots": [
+    {
+      "label": "SLOT1",
+      "state": "idle",
+      "present": true,
+      "running": true,
+      "url": "rfc2217://workbench.local:4001",
+      "tcp_port": 4001,
+      "devnode": "/dev/ttyACM0",
+      "detected_chip": "esp32s3",
+      "jtag_slot": "SLOT1",
+      "debugging": true,
+      "debug_gdb_port": 3333,
+      "is_probe": false,
+      "usb_devices": [
+        {"product": "USB JTAG/serial debug unit", "vid_pid": "303a:1001"}
+      ]
+    }
+  ]
+}
+```
+
+`state` is one of `absent`, `idle`, `monitoring`, `resetting`, `debugging`, `recovering`, `download_mode`.
+
+---
+
+### 2. Serial Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/serial/reset` | Reset device via DTR/RTS `{"slot"}` → `{"ok", "output": ["boot line", ...]}` |
+| POST | `/api/serial/monitor` | Wait for pattern on serial output `{"slot", "pattern?", "timeout?"}` → `{"ok", "matched", "line", "output"}` |
+| POST | `/api/serial/recover` | Manual flap recovery trigger `{"slot"}` |
+| POST | `/api/serial/release` | Release BOOT GPIO and reboot device after download-mode flash `{"slot"}` |
+| POST | `/api/enter-portal` | Join DUT's captive portal AP, submit WiFi creds, then restart local AP `{"portal_ssid?", "ssid", "password?"}` |
 | POST | `/api/start` | Manually start proxy for a slot |
 | POST | `/api/stop` | Manually stop proxy for a slot |
-| POST | `/api/serial/reset` | Reset device via DTR/RTS |
-| POST | `/api/serial/monitor` | Read serial output with pattern match |
-| POST | `/api/serial/recover` | Manual flap recovery trigger `{"slot"}` |
-| POST | `/api/serial/release` | Release GPIO after flashing, reboot into firmware `{"slot"}` |
-| POST | `/api/enter-portal` | Connect to DUT's captive portal SoftAP, submit WiFi creds, start local AP `{"portal_ssid?", "ssid", "password?"}` |
+| POST | `/api/hotplug` | udev hotplug event (internal — called by udev rule) |
 
-### WiFi
+**Flashing workflow:**
+
+1. Connect esptool over RFC2217 using the URL from `/api/devices`
+2. Use `--before=default-reset --after=no-reset` to avoid USB re-enumeration
+3. After flash: `POST /api/serial/reset` to reboot into the new firmware
+4. Verify with `POST /api/serial/monitor` matching a boot string
+
+---
+
+### 3. GDB Debug
+
+Auto-started on device plug-in for chips with USB JTAG or configured ESP-Prog probes. These endpoints manually override auto-detection.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/wifi/ap_start` | Start SoftAP `{"ssid", "password?", "channel?"}` |
+| POST | `/api/debug/start` | Start OpenOCD `{"slot?", "chip?", "probe?"}` → `{"ok", "slot", "chip", "gdb_port", "telnet_port"}` |
+| POST | `/api/debug/stop` | Stop OpenOCD `{"slot?"}` |
+| GET | `/api/debug/status` | Debug state per slot |
+| GET | `/api/debug/group` | Slot groups and roles (dual-USB ESP32-S3) |
+| GET | `/api/debug/probes` | Available ESP-Prog probes |
+
+GDB connects with `target extended-remote workbench.local:<gdb_port>`.
+
+---
+
+### 4. WiFi Instrument
+
+Controls the Pi's wlan0 radio. Access Point and Station modes are mutually exclusive.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/wifi/mode` | Current mode (`wifi-testing` or `serial-interface`) |
+| POST | `/api/wifi/mode` | Switch mode `{"mode"}` |
+| POST | `/api/wifi/ap_start` | Start SoftAP `{"ssid", "password?", "channel?"}` → `{"ok", "ip"}` |
 | POST | `/api/wifi/ap_stop` | Stop SoftAP |
-| GET | `/api/wifi/ap_status` | AP status, SSID, connected stations |
-| POST | `/api/wifi/sta_join` | Join a WiFi network as station `{"ssid", "password?"}` |
+| GET | `/api/wifi/ap_status` | `{"active", "ssid", "channel", "stations": [{"mac", "ip"}, ...]}` |
+| POST | `/api/wifi/sta_join` | Join a WiFi network `{"ssid", "password?"}` → `{"ok", "ip", "gateway"}` |
 | POST | `/api/wifi/sta_leave` | Disconnect from WiFi network |
-| GET | `/api/wifi/scan` | Scan for nearby WiFi networks |
-| POST | `/api/wifi/http` | HTTP relay through Pi's radio `{"method", "url", "headers?", "body?"}` |
-| GET | `/api/wifi/events` | Event queue with long-poll `?timeout=` |
-| GET | `/api/wifi/mode` | Current operating mode |
-| POST | `/api/wifi/mode` | Switch mode `{"mode": "wifi-testing"|"serial-interface"}` |
+| GET | `/api/wifi/scan` | Scan nearby WiFi networks |
+| POST | `/api/wifi/http` | HTTP relay through the Pi's wlan0 radio `{"method", "url", "headers?", "body?"}` |
+| GET | `/api/wifi/events` | Long-poll for station events `?timeout=` |
 
-### GPIO
+---
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/gpio/set` | Drive pin `{"pin": 17, "value": 0|1|"z"}` |
-| GET | `/api/gpio/status` | Read state of all actively driven pins |
-
-### UDP Log
+### 5. BLE Proxy
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/udplog` | Get buffered log lines `?since=&source=&limit=` |
+| POST | `/api/ble/scan` | Scan for peripherals `{"timeout?", "name_filter?"}` → list of `{"address", "name", "rssi"}` |
+| POST | `/api/ble/connect` | Connect by MAC address `{"address"}` |
+| POST | `/api/ble/disconnect` | Disconnect current connection |
+| GET | `/api/ble/status` | `{"state": "idle"|"scanning"|"connected", "address?"}` |
+| POST | `/api/ble/write` | Write to a GATT characteristic `{"characteristic", "data", "response?"}` (data as hex string) |
+
+One BLE connection at a time. Requires `rfkill unblock bluetooth`.
+
+---
+
+### 6. GPIO Control
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/gpio/set` | Drive pin `{"pin": 17, "value": 0 | 1 | "z"}` |
+| GET | `/api/gpio/status` | State of all actively driven pins |
+
+Allowlist: `{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}`. Others are reserved (I²C, GPCLK, PE4302). Always release with `"value": "z"` when done.
+
+---
+
+### 7. UDP Log
+
+Listens on UDP port 5555 for log messages from ESP32 devices.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/udplog` | `?since=&source=&limit=` — fetch buffered log lines |
 | DELETE | `/api/udplog` | Clear the log buffer |
 
-### Firmware
+---
+
+### 8. Firmware Repository
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/firmware/<project>/<file>` | Download binary (used by ESP32 OTA client) |
+| GET | `/firmware/<project>/<file>` | Download binary (used by ESP32 OTA clients) |
 | GET | `/api/firmware/list` | List all available firmware files |
-| POST | `/api/firmware/upload` | Upload binary (multipart: `project` + `file`) |
+| POST | `/api/firmware/upload` | Upload binary (multipart form-data: `project` + `file`) |
 | DELETE | `/api/firmware/delete` | Delete a file `{"project", "filename"}` |
 
-### BLE
+Files served under `http://<pi-ip>:8080/firmware/...` are suitable as ESP-IDF `esp_https_ota` download URLs.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/ble/scan` | Scan for peripherals `{"timeout?", "name_filter?"}` |
-| POST | `/api/ble/connect` | Connect by address `{"address"}` |
-| POST | `/api/ble/disconnect` | Disconnect current connection |
-| GET | `/api/ble/status` | Connection state (`idle` / `scanning` / `connected`) |
-| POST | `/api/ble/write` | Write hex bytes `{"characteristic", "data", "response?"}` |
+---
 
-### GDB Debug
+### 9. Signal Generator
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/debug/start` | Override: manually start OpenOCD `{"slot", "chip?", "probe?"}` |
-| POST | `/api/debug/stop` | Override: manually stop OpenOCD `{"slot"}` |
-| GET | `/api/debug/status` | Debug state for all slots |
-| GET | `/api/debug/group` | Slot groups and roles (dual-USB) |
-| GET | `/api/debug/probes` | Available debug probes (ESP-Prog) |
-
-### Signal Generator
+Auto-selecting RF source (Si5351 via I²C or GPCLK on GPIO 5/6) with optional PE4302 attenuator. Morse-keyed or continuous.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/siggen/start` | Start carrier `{"freq_hz", "backend?", "channel?", "pin?", "atten_db?", "morse?"}` |
 | POST | `/api/siggen/stop` | Stop carrier |
-| POST | `/api/siggen/freq` | Retune without restarting `{"freq_hz", "channel?"}` |
-| POST | `/api/siggen/atten` | Set PE4302 attenuation `{"db"}` |
-| GET | `/api/siggen/status` | Active state + hardware detection |
-| GET | `/api/siggen/frequencies` | Achievable frequencies `?low=&high=&backend=` |
+| POST | `/api/siggen/freq` | Retune active carrier `{"freq_hz", "channel?"}` |
+| POST | `/api/siggen/atten` | Set PE4302 attenuation in dB `{"db": 0..31.5}` |
+| GET | `/api/siggen/status` | Active state + hardware detection (`si5351`, `gpclk`, `pe4302`) |
+| GET | `/api/siggen/frequencies` | Achievable frequencies in range `?low=&high=&backend=` |
 
-### CW Beacon (legacy GPCLK-only, use `/api/siggen/*` for new code)
+**Body fields for `/api/siggen/start`:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `freq_hz` | number | Carrier frequency (8 kHz–160 MHz for Si5351, 122 kHz–250 MHz for GPCLK) |
+| `backend` | `"auto"` (default), `"si5351"`, `"gpclk"` | `auto` prefers Si5351 when detected |
+| `channel` | 0, 1, 2 | Si5351 output (CLK0–CLK2) |
+| `pin` | 5, 6 | GPCLK pin |
+| `atten_db` | 0–31.5 | Initial PE4302 attenuation |
+| `morse` | `{"message", "wpm?", "repeat?"}` | Key the carrier with Morse instead of continuous tone |
+
+**Legacy CW Beacon** (GPCLK-only, kept for backwards compatibility — use `/api/siggen/*` for new code):
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/cw/start` | Start Morse beacon `{"freq", "message", "wpm?", "pin?", "repeat?"}` |
+| POST | `/api/cw/start` | `{"freq", "message", "wpm?", "pin?", "repeat?"}` |
 | POST | `/api/cw/stop` | Stop beacon |
 | GET | `/api/cw/status` | Current beacon state |
-| GET | `/api/cw/frequencies` | List achievable frequencies `?low=&high=` |
+| GET | `/api/cw/frequencies` | List achievable GPCLK frequencies `?low=&high=` |
 
-### Test / Other
+---
+
+### 10. Test Progress
+
+Lets test scripts push live session state to the web portal for operator visibility.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/test/update` | Push test session start/step/result/end |
-| GET | `/api/test/progress` | Poll current test session state |
-| POST | `/api/human-interaction` | Block until operator confirms `{"message", "timeout?"}` |
-| GET | `/api/human/status` | Check if a human interaction is pending |
-| POST | `/api/human/done` | Confirm the pending interaction |
+| POST | `/api/test/update` | Push start/step/result/end (see body schemas below) |
+| GET | `/api/test/progress` | Current session state for UI polling |
+
+**`POST /api/test/update` body variants:**
+
+- Start: `{"spec": "<name>", "phase": "<label>", "total": <n>}`
+- Step: `{"current": {"id", "name", "step", "manual?"}}`
+- Result: `{"result": {"id", "name", "result": "PASS"|"FAIL"|"SKIP", "details?"}}`
+- End: `{"end": true}`
+
+---
+
+### 11. Human Interaction
+
+Blocks a test script until the operator confirms a physical action on the Pi.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/human-interaction` | Show modal on the web UI and block until confirmed `{"message", "timeout?"}` |
+| GET | `/api/human/status` | Is an interaction pending? |
+| POST | `/api/human/done` | Confirm the pending interaction (operator action) |
 | POST | `/api/human/cancel` | Cancel the pending interaction |
-| GET | `/api/log` | Activity log `?since=` |
+
+---
+
+### 12. Activity Log
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/log` | Recent activity entries `?since=<iso-timestamp>` |
 
 ---
 
