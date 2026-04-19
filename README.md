@@ -212,9 +212,21 @@ sudo hciconfig hci0 up
 sudo bluetoothctl power on
 ```
 
-### 8. CW Beacon (Morse Transmitter)
+### 8. Signal Generator (Si5351 + PE4302, with GPCLK fallback)
 
-Generates a **Morse-keyed RF carrier** on GPIO 5 or GPIO 6 using the BCM2835 hardware clock generator (GPCLK). Designed for direction finder testing on the 80m amateur band (3.5-4.0 MHz). No additional hardware -- just a wire antenna on the GPIO pin.
+Unified RF source with programmable frequency, attenuation, and optional Morse keying. Auto-selects between two backends:
+
+- **Si5351** (I²C clock generator on GPIO 2/3) — 8 kHz to 160 MHz, three independent channels (CLK0–CLK2), precise fractional synthesis. Preferred when detected on I²C.
+- **GPCLK** (BCM2835 hardware clock on GPIO 5/6) — 122 kHz to 250 MHz in integer-divider steps from 500 MHz PLLD. Always available, no extra hardware.
+
+Optional **PE4302** digital step attenuator (0–31.5 dB in 0.5 dB steps) can sit in the RF path, controlled via 3-wire serial on GPIO 6/12/13. Works with either backend. If not installed, attenuation calls return a clean error.
+
+Both backends share a Morse keyer, so you can key any carrier with a CW message — useful for direction-finder beacons, sensitivity tests, or field-day practice. Without a `morse` argument, the carrier runs continuous.
+
+**Wiring:**
+- Si5351: SDA=GPIO2 (pin 3), SCL=GPIO3 (pin 5), VCC=3.3V (pin 1), GND (pin 9)
+- PE4302: LE=GPIO6 (pin 31), CLK=GPIO12 (pin 32), DATA=GPIO13 (pin 33), VCC=3.3V/5V
+- GPCLK: output on GPIO5 (pin 29) or GPIO6 (pin 31)
 
 ### 9. Test Automation
 
@@ -311,9 +323,20 @@ wt.ble_connect(devices[0]["address"])
 wt.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
 wt.ble_disconnect()
 
-# CW beacon
+# CW beacon (legacy GPCLK-only)
 wt.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
 wt.cw_stop()
+
+# Signal generator — continuous carrier
+wt.siggen_start(freq_hz=3_500_000, backend="si5351")
+wt.siggen_atten(db=12.0)                 # attenuate via PE4302
+wt.siggen_freq(freq_hz=7_100_000)        # retune without stopping
+wt.siggen_stop()
+
+# Signal generator — Morse beacon (auto-selects Si5351 if available)
+wt.siggen_start(freq_hz=3_571_000,
+                morse={"message": "VVV DE TEST", "wpm": 15, "repeat": True})
+wt.siggen_stop()
 
 # Test progress
 wt.test_start(spec="Firmware v2.1", phase="Integration", total=10)
@@ -380,12 +403,33 @@ curl -X POST http://workbench.local:8080/api/ble/write \
   -d '{"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","data":"0248656c6c6f"}'
 curl -X POST http://workbench.local:8080/api/ble/disconnect
 
-# CW beacon
+# CW beacon (legacy GPCLK-only)
 curl -X POST http://workbench.local:8080/api/cw/start \
   -H "Content-Type: application/json" \
   -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
 curl http://workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
 curl -X POST http://workbench.local:8080/api/cw/stop
+
+# Signal generator — continuous carrier at 3.5 MHz on Si5351
+curl -X POST http://workbench.local:8080/api/siggen/start \
+  -H "Content-Type: application/json" \
+  -d '{"freq_hz": 3500000, "backend": "si5351"}'
+
+# Signal generator — Morse-keyed beacon (auto-selects Si5351 if present, else GPCLK)
+curl -X POST http://workbench.local:8080/api/siggen/start \
+  -H "Content-Type: application/json" \
+  -d '{"freq_hz": 3571000, "morse": {"message": "VVV DE TEST", "wpm": 15, "repeat": true}}'
+
+# Set attenuation (requires PE4302 in RF path)
+curl -X POST http://workbench.local:8080/api/siggen/atten \
+  -H "Content-Type: application/json" -d '{"db": 12.5}'
+
+# Retune without restarting
+curl -X POST http://workbench.local:8080/api/siggen/freq \
+  -H "Content-Type: application/json" -d '{"freq_hz": 7100000}'
+
+# Stop
+curl -X POST http://workbench.local:8080/api/siggen/stop
 ```
 
 ---
@@ -486,7 +530,18 @@ curl -X POST http://workbench.local:8080/api/cw/stop
 | GET | `/api/debug/group` | Slot groups and roles (dual-USB) |
 | GET | `/api/debug/probes` | Available debug probes (ESP-Prog) |
 
-### CW Beacon
+### Signal Generator
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/siggen/start` | Start carrier `{"freq_hz", "backend?", "channel?", "pin?", "atten_db?", "morse?"}` |
+| POST | `/api/siggen/stop` | Stop carrier |
+| POST | `/api/siggen/freq` | Retune without restarting `{"freq_hz", "channel?"}` |
+| POST | `/api/siggen/atten` | Set PE4302 attenuation `{"db"}` |
+| GET | `/api/siggen/status` | Active state + hardware detection |
+| GET | `/api/siggen/frequencies` | Achievable frequencies `?low=&high=&backend=` |
+
+### CW Beacon (legacy GPCLK-only, use `/api/siggen/*` for new code)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -516,11 +571,18 @@ pi/
   portal.py                  Main HTTP server, proxy supervisor, all API endpoints
   wifi_controller.py         WiFi AP/STA/scan/relay backend
   ble_controller.py          BLE scan/connect/write backend (bleak)
-  cw_beacon.py               CW beacon (GPCLK Morse transmitter for DF testing)
+  cw_beacon.py               CW beacon compatibility shim (delegates to signal_generator)
+  signal_generator.py        Unified RF source: Si5351 (I2C) + optional PE4302, GPCLK fallback
+  si5351.py                  Si5351A I2C clock generator driver
+  pe4302.py                  PE4302 3-wire serial step attenuator driver
+  gpclk.py                   BCM2835/7 GPCLK hardware clock (GPIO 5/6)
+  morse.py                   Backend-agnostic Morse keyer
+  bcm_gpio.py                Shared /dev/mem GPIO primitives
   debug_controller.py        GDB debug manager (OpenOCD lifecycle, probe allocation)
   plain_rfc2217_server.py    RFC2217 serial proxy with DTR/RTS passthrough
   install.sh                 One-command installer
-  config/workbench.json      Optional hardware config (GPIO pins, debug probes)
+  config/workbench.json      Slot/GPIO/debug probe config
+  config/signalgen.json      Signal generator config (I2C bus, PE4302 pins)
   scripts/                   udev and dnsmasq callback scripts
   udev/                      Hotplug rules
   systemd/                   Service unit file

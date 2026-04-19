@@ -76,7 +76,7 @@ mypy --strict .
 - Dual-USB boards (ESP32-S3 with sub-hub) map both interfaces to the same slot
 - Portal runs on port 8080, serial RFC2217 on ports 4001-4003, GDB on 3333-3335
 - WiFi modes: AP (Pi hosts 192.168.4.0/24) or STA (Pi joins DUT network)
-- GPIO pin allowlist: `{5,6,12,13,16,17,18,19,20,21,22,23,24,25,26}`
+- GPIO pin allowlist: `{16,17,18,19,20,21,22,23,24,25,26,27}` (others dedicated to I2C, GPCLK, PE4302)
 - Always release GPIO pins after use: `gpio_set(pin, "z")`
 - One RFC2217 client per serial device at a time
 - ESP32-C3 reset: use `POST /api/serial/reset` or `--after=no-reset` with esptool
@@ -96,6 +96,15 @@ mypy --strict .
 - Per-slot: detects chip type + JTAG source (own slot for built-in JTAG, probe slot for ESP-Prog, or none)
 - `/api/devices` exposes `detected_chip`, `jtag_slot`, `debugging`, `is_probe` per slot
 - Probe-only slots (FTDI VID `0403`, no DUT) are never auto-debugged
+
+## Signal Generator
+
+- `POST /api/siggen/start {freq_hz, backend?, channel?, atten_db?, morse?}` — start carrier (optionally Morse-keyed)
+- `POST /api/siggen/stop` — stop carrier
+- `POST /api/siggen/atten {db}` — PE4302 attenuation (0–31.5 dB, 0.5 dB step)
+- Backend `auto` prefers Si5351, falls back to GPCLK
+- Pinout: Si5351 on I2C1 (GPIO2/3), PE4302 LE/CLK/DATA on GPIO6/12/13, GPCLK on GPIO5/6
+- PE4302 board jumpers: close J4, open J5/J6/J7 for serial mode
 
 ## Gotchas / Do Not
 

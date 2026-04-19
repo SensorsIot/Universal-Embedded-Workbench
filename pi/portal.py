@@ -3002,6 +3002,23 @@ _UI_HTML = """\
         .test-result .badge.pass { color: #28a745; }
         .test-result .badge.fail { color: #dc3545; }
         .test-result .badge.skip { color: #ffc107; }
+        /* Signal generator panel */
+        .siggen-section { margin: 20px 0 0; }
+        .siggen-box { background: #16213e; border-radius: 12px; padding: 20px; border: 2px solid #0f3460; }
+        .siggen-row { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        .siggen-row label { color: #ccc; min-width: 70px; font-size: 0.9em; }
+        .siggen-row input, .siggen-row select { background: #0f1a30; color: #e0e0e0;
+            border: 1px solid #2a4070; border-radius: 4px; padding: 4px 8px; font-size: 0.9em; }
+        .siggen-row input[type="number"] { width: 130px; }
+        .siggen-row input[type="range"] { flex: 1; min-width: 200px; }
+        .siggen-row button { background: #28a745; color: #fff; border: none;
+            padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .siggen-row button.stop { background: #dc3545; }
+        .siggen-row button:hover { opacity: 0.85; }
+        .siggen-hw { font-size: 0.85em; color: #888; margin-bottom: 12px; }
+        .siggen-hw .ok { color: #28a745; }
+        .siggen-hw .off { color: #dc3545; }
+        .siggen-state { color: #f0a030; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -3020,6 +3037,37 @@ _UI_HTML = """\
             <div class="test-counter" id="test-counter"></div>
             <div class="test-current" id="test-current"></div>
             <div class="test-results" id="test-results"></div>
+        </div>
+    </div>
+    <div class="siggen-section" id="siggen-section">
+        <h2>Signal Generator</h2>
+        <div class="siggen-box">
+            <div class="siggen-hw" id="siggen-hw"></div>
+            <div class="siggen-row">
+                <label>Freq (Hz)</label>
+                <input type="number" id="siggen-freq" value="3500000" min="8000" max="200000000" step="1000">
+                <label>Backend</label>
+                <select id="siggen-backend">
+                    <option value="auto">auto</option>
+                    <option value="si5351">si5351</option>
+                    <option value="gpclk">gpclk</option>
+                </select>
+                <button onclick="siggenStart()">Start</button>
+                <button class="stop" onclick="siggenStop()">Stop</button>
+            </div>
+            <div class="siggen-row">
+                <label>Atten (dB)</label>
+                <input type="range" id="siggen-atten-slider" min="0" max="31.5" step="0.5" value="0"
+                    oninput="siggenAttenPreview(this.value)" onchange="siggenAtten(this.value)">
+                <span id="siggen-atten-val" style="color:#e0e0e0; min-width: 50px;">0.0 dB</span>
+            </div>
+            <div class="siggen-row">
+                <label>Morse</label>
+                <input type="text" id="siggen-morse-msg" placeholder="VVV DE TEST (leave empty for continuous)" style="flex:1; min-width: 200px;">
+                <label>WPM</label>
+                <input type="number" id="siggen-morse-wpm" value="15" min="1" max="60" style="width: 60px;">
+            </div>
+            <div id="siggen-state" class="siggen-state">idle</div>
         </div>
     </div>
     <div class="log-section">
@@ -3355,8 +3403,67 @@ async function fetchTestProgress() {
     } catch (e) { /* ignore */ }
 }
 
+async function fetchSiggen() {
+    try {
+        const resp = await fetch('/api/siggen/status');
+        const d = await resp.json();
+        const hw = d.hardware || {};
+        const fmt = (ok, name) => '<span class="' + (ok ? 'ok' : 'off') + '">' + name + (ok ? ' ✓' : ' ✗') + '</span>';
+        document.getElementById('siggen-hw').innerHTML =
+            'Hardware: ' + fmt(hw.si5351, 'Si5351') + ' &nbsp; ' + fmt(hw.gpclk, 'GPCLK') + ' &nbsp; ' + fmt(hw.pe4302, 'PE4302');
+        let state = 'idle';
+        if (d.active) {
+            state = d.backend + ' @ ' + (d.freq_hz/1e6).toFixed(6) + ' MHz';
+            if (d.channel !== null && d.channel !== undefined) state += ' (CLK' + d.channel + ')';
+            if (d.pin !== null && d.pin !== undefined) state += ' (GPIO' + d.pin + ')';
+            if (d.atten_db !== null) state += ' · ' + d.atten_db + ' dB';
+            if (d.morse) state += ' · Morse: "' + d.morse.message + '" @ ' + d.morse.wpm + ' WPM';
+        }
+        document.getElementById('siggen-state').textContent = state;
+        if (d.atten_db !== null && !document.activeElement.matches('#siggen-atten-slider')) {
+            document.getElementById('siggen-atten-slider').value = d.atten_db;
+            document.getElementById('siggen-atten-val').textContent = d.atten_db.toFixed(1) + ' dB';
+        }
+    } catch (e) { /* ignore */ }
+}
+
+async function siggenStart() {
+    const freq = parseFloat(document.getElementById('siggen-freq').value);
+    const backend = document.getElementById('siggen-backend').value;
+    const msg = document.getElementById('siggen-morse-msg').value.trim();
+    const wpm = parseInt(document.getElementById('siggen-morse-wpm').value) || 15;
+    const body = {freq_hz: freq, backend: backend};
+    if (msg) body.morse = {message: msg, wpm: wpm, repeat: true};
+    try {
+        await fetch('/api/siggen/start', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)});
+        fetchSiggen();
+    } catch (e) { /* ignore */ }
+}
+
+async function siggenStop() {
+    try {
+        await fetch('/api/siggen/stop', {method: 'POST'});
+        fetchSiggen();
+    } catch (e) { /* ignore */ }
+}
+
+function siggenAttenPreview(val) {
+    document.getElementById('siggen-atten-val').textContent = parseFloat(val).toFixed(1) + ' dB';
+}
+
+async function siggenAtten(val) {
+    try {
+        await fetch('/api/siggen/atten', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({db: parseFloat(val)})});
+        fetchSiggen();
+    } catch (e) { /* ignore */ }
+}
+
 async function refresh() {
-    await Promise.all([fetchDevices(), fetchLog(), fetchHuman(), fetchTestProgress()]);
+    await Promise.all([fetchDevices(), fetchLog(), fetchHuman(), fetchTestProgress(), fetchSiggen()]);
 }
 refresh();
 setInterval(refresh, 5000);

@@ -446,6 +446,68 @@ class WorkbenchDriver:
             f"/api/cw/frequencies?low={low}&high={high}")
         return result.get("frequencies", [])
 
+    # ── Signal generator (Si5351 + PE4302, with GPCLK fallback) ──────
+
+    def siggen_start(self, freq_hz: float, backend: str = "auto",
+                     channel: Optional[int] = None, pin: Optional[int] = None,
+                     atten_db: Optional[float] = None,
+                     morse: Optional[dict] = None) -> dict:
+        """Start an RF carrier.
+
+        Args:
+            freq_hz: Carrier frequency in Hz.
+            backend: "auto" (prefer Si5351), "si5351", or "gpclk".
+            channel: Si5351 output channel (0, 1, 2). Default from config.
+            pin: GPCLK pin (5 or 6). Default from config.
+            atten_db: Initial PE4302 attenuation (0..31.5 dB).
+            morse: Optional {"message": str, "wpm": int, "repeat": bool}
+                   to key the carrier with Morse instead of continuous tone.
+
+        Returns:
+            State dict: backend, freq_hz, channel, pin, atten_db, morse.
+        """
+        body: dict = {"freq_hz": freq_hz, "backend": backend}
+        if channel is not None:
+            body["channel"] = channel
+        if pin is not None:
+            body["pin"] = pin
+        if atten_db is not None:
+            body["atten_db"] = atten_db
+        if morse is not None:
+            body["morse"] = morse
+        return self._api_post("/api/siggen/start", body, timeout=15)
+
+    def siggen_stop(self) -> dict:
+        """Stop the signal generator."""
+        return self._api_post("/api/siggen/stop", {}, timeout=10)
+
+    def siggen_freq(self, freq_hz: float,
+                    channel: Optional[int] = None) -> dict:
+        """Retune the active carrier without restarting the keyer."""
+        body: dict = {"freq_hz": freq_hz}
+        if channel is not None:
+            body["channel"] = channel
+        return self._api_post("/api/siggen/freq", body, timeout=10)
+
+    def siggen_atten(self, db: float) -> dict:
+        """Set PE4302 attenuation in dB (0..31.5, 0.5 dB steps).
+
+        Raises CommandError if PE4302 is not available.
+        """
+        return self._api_post("/api/siggen/atten", {"db": db}, timeout=10)
+
+    def siggen_status(self) -> dict:
+        """Current generator state + hardware detection."""
+        return self._api_get("/api/siggen/status")
+
+    def siggen_frequencies(self, low: float, high: float,
+                           backend: str = "auto") -> list:
+        """Achievable frequencies in a range (gpclk returns discrete
+        dividers; si5351 reports the range as continuously tunable)."""
+        result = self._api_get(
+            f"/api/siggen/frequencies?low={low}&high={high}&backend={backend}")
+        return result.get("frequencies", [])
+
     # ── GDB debug ─────────────────────────────────────────────────────
 
     def debug_start(self, slot: str = None, chip: str = None,
