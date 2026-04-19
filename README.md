@@ -87,14 +87,16 @@ Everything auto-restarts after a flash -- the workbench detects the USB re-enume
 | **USB hub** (Pi Zero 2 W only) | Connect multiple ESP32 boards. Pi 3/4/5 already have 4 USB ports. |
 | **Jumper wires** (optional) | Pi GPIO to DUT GPIO for automated boot mode / reset control |
 
-**Pi model auto-detection:** The portal scans the Pi's USB hub topology on startup and creates one slot per hub port automatically. No config file needed.
+**Auto-detection:** The portal walks `/sys/bus/usb/devices/` on startup, finds every downstream USB hub, and creates one slot per hub port. Ports occupied by non-serial devices (USB Ethernet, storage) are filtered out, so only ESP32-usable ports become slots. TCP ports are auto-assigned as `4001 + slot_index`, GDB ports as `3333 + slot_index`.
 
-| Pi model | Detected slots |
-|----------|----------------|
-| Pi Zero 2 W + 4-port hub | 4 slots (`SLOT1–SLOT4` on external hub) |
-| Pi 3 B+ | 4 slots on internal hub |
-| Pi 4 B | 2 USB2 + 2 USB3 slots |
-| Pi 5 | 4 slots on XHCI controller |
+| Pi model | Expected slots | Notes |
+|----------|---------------|-------|
+| Pi Zero 2 W + external hub | 3–4 (external hub ports minus ethernet) | Tested |
+| Pi 3 B+ | 3 (4-port internal hub; ethernet PHY on one port is skipped) | Same kernel API, expected to work |
+| Pi 4 B | 2 USB2 + 2 USB3 slots | Same kernel API, expected to work |
+| Pi 5 | Up to 4 slots on XHCI | Same kernel API, expected to work |
+
+No config file is needed for auto-detection. Custom overrides (labels, specific TCP/GDB ports, GPIO pins, debug probes) can be provided via `/etc/rfc2217/workbench.json`.
 
 GPIO wiring is optional. Without it, the workbench still provides serial and debug for every plugged-in device. GPIO is only needed if you want scripts to reset the DUT, force download mode, or trigger captive portal boot from the Pi.
 

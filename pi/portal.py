@@ -914,6 +914,9 @@ def _refresh_slot_health(slot: dict):
 
 
 _PROBE_VIDS = {"0403"}  # FTDI (ESP-Prog, etc.)
+# JTAG-capable FTDI chips used by ESP-Prog and clones.
+# FT232R (6001) is a single-channel USB-UART and is NOT a JTAG probe.
+_PROBE_PIDS = {"6010", "6011", "6014", "6015"}  # FT2232H, FT4232H, FT232H, FT230X(H)
 
 
 def _build_probe_slot_map() -> dict[str, str]:
@@ -942,12 +945,22 @@ def _build_probe_slot_map() -> dict[str, str]:
 
 
 def _is_probe_slot(slot: dict) -> bool:
-    """True if slot contains only a debug probe (no flashable DUT)."""
+    """True if slot contains only a JTAG-capable debug probe (no DUT).
+
+    Must be an FTDI multi-interface chip (FT2232H, FT4232H, FT232H).
+    Single-channel USB-UART chips like FT232R are not probes.
+    """
     usb_devs = slot.get("_usb_devices", [])
     if not usb_devs:
         return False
-    probe_devs = [d for d in usb_devs
-                  if d.get("vid_pid", "").split(":")[0] in _PROBE_VIDS]
+    probe_devs = []
+    for d in usb_devs:
+        vid_pid = d.get("vid_pid", "").split(":")
+        if len(vid_pid) != 2:
+            continue
+        vid, pid = vid_pid
+        if vid in _PROBE_VIDS and pid in _PROBE_PIDS:
+            probe_devs.append(d)
     return bool(probe_devs) and not any(
         d for d in usb_devs if d not in probe_devs)
 
@@ -3242,6 +3255,33 @@ function statusLabel(s) {
     };
     return labels[st] || st.toUpperCase();
 }
+// Identify common USB-serial chips from their VID:PID or product string
+// so the Chip line shows something more useful than "unknown device".
+function identifyUsbDevice(usb_devices) {
+    if (!usb_devices || !usb_devices.length) return 'unknown device';
+    const known = {
+        '0403:6001': 'FT232R (USB-UART bridge)',
+        '0403:6010': 'FT2232 (dual USB-UART)',
+        '0403:6011': 'FT4232 (quad USB-UART)',
+        '0403:6014': 'FT232H (high-speed USB-UART)',
+        '0403:6015': 'FT230X / FT231X (USB-UART)',
+        '10c4:ea60': 'CP2102 (USB-UART bridge)',
+        '10c4:ea70': 'CP2105 (dual USB-UART)',
+        '1a86:7523': 'CH340 (USB-UART bridge)',
+        '1a86:55d3': 'CH343 (USB-UART bridge)',
+        '1a86:5523': 'CH341 (USB-UART bridge)',
+        '303a:1001': 'Espressif USB JTAG/Serial',
+        '067b:2303': 'PL2303 (USB-UART bridge)',
+    };
+    // Prefer the first non-Espressif match (if an ESP32 is present its chip
+    // is already set via detected_chip elsewhere).
+    for (const d of usb_devices) {
+        const name = known[d.vid_pid];
+        if (name) return name;
+    }
+    // Fall back to the raw product string if we can't identify it.
+    return usb_devices[0].product || 'unknown device';
+}
 
 function renderSlots(slots) {
     const el = document.getElementById('slots');
@@ -3283,7 +3323,8 @@ function renderSlots(slots) {
                 <div>Port: <span>${s.tcp_port || '-'}</span></div>
                 <div>Device: <span>${s.devnode || 'None'}</span></div>
                 ${s.pid ? '<div>PID: <span>' + s.pid + '</span></div>' : ''}
-                ${s.detected_chip ? '<div>Chip: <span>' + s.detected_chip + '</span></div>' : ''}
+                ${s.detected_chip ? '<div>Chip: <span>' + s.detected_chip + '</span></div>' :
+                  (s.present ? '<div>Chip: <span style="color:#aaa">' + identifyUsbDevice(s.usb_devices) + '</span></div>' : '')}
                 ${s.detected_chip && s.jtag_slot ? '<div>JTAG: <span>' + s.jtag_slot + (s.jtag_slot === label ? ' (built-in)' : ' (probe)') + '</span></div>' : (s.detected_chip ? '<div>JTAG: <span>none</span></div>' : '')}
                 ${s.debugging ? '<div class="debug-active">Debug: <span>GDB :' + s.debug_gdb_port + '</span></div>' : (s.detected_chip ? '<div class="debug-idle">Debug: <span>idle</span></div>' : '')}
                 ${(s.usb_devices || []).map(d => '<div class="usb-device">USB: <span>' + d.product + '</span></div>').join('')}

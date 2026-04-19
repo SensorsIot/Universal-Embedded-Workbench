@@ -17,7 +17,8 @@ pi/
   wifi_controller.py          # WiFi instrument (AP, STA, scan, relay)
   plain_rfc2217_server.py     # RFC2217 server with DTR/RTS passthrough
   install.sh                  # Pi installer
-  config/slots.json           # Slot-to-port mapping
+  # No default workbench.json — slots auto-detected from USB topology
+  config/signalgen.json       # Signal generator config (Si5351 I2C, PE4302 pins)
   udev/                       # udev rules for hotplug
   cw_beacon.py                # CW beacon — compat shim over signal_generator (GPCLK backend)
   signal_generator.py         # Unified RF source: Si5351 (I2C) with GPCLK fallback + optional PE4302 attenuator
@@ -72,9 +73,9 @@ mypy --strict .
 
 ## Key Conventions
 
-- 3 fixed slots (SLOT1-SLOT3) mapped to physical USB hub ports via `usb_prefix` in `workbench.json`
+- Slots auto-detected from USB hub topology at portal startup (one per usable hub port, skipping Ethernet/storage). Optional override via `workbench.json`.
 - Dual-USB boards (ESP32-S3 with sub-hub) map both interfaces to the same slot
-- Portal runs on port 8080, serial RFC2217 on ports 4001-4003, GDB on 3333-3335
+- Portal runs on port 8080, serial RFC2217 on ports 4001+slot_index, GDB on 3333+slot_index
 - WiFi modes: AP (Pi hosts 192.168.4.0/24) or STA (Pi joins DUT network)
 - GPIO pin allowlist: `{16,17,18,19,20,21,22,23,24,25,26,27}` (others dedicated to I2C, GPCLK, PE4302)
 - Always release GPIO pins after use: `gpio_set(pin, "z")`
