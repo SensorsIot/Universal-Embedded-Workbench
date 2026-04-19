@@ -82,10 +82,19 @@ Everything auto-restarts after a flash -- the workbench detects the USB re-enume
 
 | Component | Purpose |
 |-----------|---------|
-| **Raspberry Pi** (Zero W, 3, 4, or 5) | Runs the portal. Needs onboard WiFi + Bluetooth. |
-| **USB Ethernet adapter** | Wired LAN on eth0 (wlan0 is reserved for WiFi testing) |
-| **USB hub** | Connect multiple ESP32 boards |
+| **Raspberry Pi** (any model) | Runs the portal. Needs onboard WiFi + Bluetooth. Auto-detects model and USB topology. |
+| **USB Ethernet adapter** (Pi Zero 2 W only) | Wired LAN on eth0 (wlan0 is reserved for WiFi testing). Pi 3/4/5 have built-in Ethernet. |
+| **USB hub** (Pi Zero 2 W only) | Connect multiple ESP32 boards. Pi 3/4/5 already have 4 USB ports. |
 | **Jumper wires** (optional) | Pi GPIO to DUT GPIO for automated boot mode / reset control |
+
+**Pi model auto-detection:** The portal scans the Pi's USB hub topology on startup and creates one slot per hub port automatically. No config file needed.
+
+| Pi model | Detected slots |
+|----------|----------------|
+| Pi Zero 2 W + 4-port hub | 4 slots (`SLOT1–SLOT4` on external hub) |
+| Pi 3 B+ | 4 slots on internal hub |
+| Pi 4 B | 2 USB2 + 2 USB3 slots |
+| Pi 5 | 4 slots on XHCI controller |
 
 GPIO wiring is optional. Without it, the workbench still provides serial and debug for every plugged-in device. GPIO is only needed if you want scripts to reset the DUT, force download mode, or trigger captive portal boot from the Pi.
 
@@ -99,12 +108,12 @@ GPIO wiring is optional. Without it, the workbench still provides serial and deb
   Raspberry Pi ---- wlan0 (WiFi test AP: 192.168.4.x)
   workbench.local      hci0  (Bluetooth LE)
        |             UDP :5555 (log receiver)
-       | USB hub
+       | USB hub (internal on Pi 3/4/5, external on Zero)
        |
-  +----+----+----+
+  +----+----+----+----+
   |    |    |    |
- :4001 :4002 :4003
- SLOT1 SLOT2 SLOT3
+ :4001 :4002 :4003 :4004  ← auto-assigned (4001 + slot index)
+ SLOT1 SLOT2 SLOT3 SLOT4  ← one per detected hub port
 ```
 
 eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicated to WiFi testing. They never overlap.

@@ -119,12 +119,10 @@ chmod +x /usr/local/bin/wifi-lease-notify.sh
 # ---------------------------------------------------------------------------
 # 6. Install config files (don't overwrite existing)
 # ---------------------------------------------------------------------------
-if [ ! -f /etc/rfc2217/workbench.json ]; then
-    echo "Installing default slot config..."
-    cp "$SCRIPT_DIR/config/workbench.json" /etc/rfc2217/workbench.json
-else
-    echo "Slot config already exists, skipping..."
-fi
+# No default workbench.json — the portal auto-detects Pi model and USB
+# hub topology on startup. Users who want custom labels/pins can create
+# /etc/rfc2217/workbench.json manually (see pi/config/examples/).
+echo "Slot config: auto-detected at runtime from USB topology"
 
 if [ ! -f /etc/rfc2217/signalgen.json ]; then
     echo "Installing default signal generator config..."
@@ -173,6 +171,5 @@ echo ""
 echo "Portal running at: http://$(hostname -I | awk '{print $1}'):8080"
 echo ""
 echo "Next steps:"
-echo "  1. Discover slot keys:  rfc2217-learn-slots"
-echo "  2. Edit config:         sudo nano /etc/rfc2217/workbench.json"
-echo "  3. Restart portal:      sudo systemctl restart rfc2217-portal"
+echo "  Slots auto-detect on boot. Plug in ESP32s and browse the portal."
+echo "  Custom config (optional): sudo nano /etc/rfc2217/workbench.json"

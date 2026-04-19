@@ -325,8 +325,108 @@ def start_beacon():
 _global_config: dict = {}
 
 
+def _port_is_serial_usable(hub_dev_path: str, port_num: int) -> bool:
+    """Return True if the given hub port is empty OR has a serial device.
+
+    Non-serial devices (ethernet adapters, storage, input) mean the port
+    is used for something else and should NOT be exposed as a slot.
+    Empty ports are kept — user may plug an ESP32 in later.
+    """
+    import glob as _glob
+    # A device on this port would be at e.g. /sys/bus/usb/devices/1-1.2
+    hub_name = os.path.basename(hub_dev_path)
+    child_path = os.path.join("/sys/bus/usb/devices", f"{hub_name}.{port_num}")
+    if not os.path.exists(child_path):
+        return True  # empty port — keep as potential slot
+    # Check the device's interface classes. Serial/CDC = 0x02 or 0x0a,
+    # FTDI/vendor = 0xff. Ethernet = 0x02 with subclass 0x06 (but class 0x02
+    # also covers CDC ACM, so discriminate by kernel driver).
+    drivers = set()
+    for iface in _glob.glob(os.path.join(child_path, f"{hub_name}.{port_num}:*")):
+        driver_link = os.path.join(iface, "driver")
+        if os.path.islink(driver_link):
+            drivers.add(os.path.basename(os.readlink(driver_link)))
+    # Keep ports where a serial-capable driver is bound
+    serial_drivers = {"cdc_acm", "ftdi_sio", "cp210x", "ch341", "usbserial",
+                      "pl2303", "ch343"}
+    return bool(drivers & serial_drivers) or not drivers
+
+
+def _detect_usb_hub_ports() -> list[str]:
+    """Enumerate external-facing USB hub ports on the Pi.
+
+    Works on any Raspberry Pi (Zero 2 W, 3, 4, 5, CM4, etc.) by walking
+    /sys/bus/usb and listing every port on every non-root hub.  Ports
+    occupied by non-serial devices (USB Ethernet, storage, etc.) are
+    skipped so only ESP32-usable ports become slots.
+
+    Returns a sorted list of usb_prefix strings (e.g. "0:1.1", "0:2.1").
+    """
+    import glob as _glob
+    ports: set[str] = set()
+    for dev_path in _glob.glob("/sys/bus/usb/devices/*"):
+        # Skip root hubs (usb1, usb2) — we want downstream hubs only
+        name = os.path.basename(dev_path)
+        if name.startswith("usb"):
+            continue
+        try:
+            with open(os.path.join(dev_path, "bDeviceClass")) as f:
+                if f.read().strip() != "09":  # 0x09 = Hub class
+                    continue
+            with open(os.path.join(dev_path, "maxchild")) as f:
+                nports = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        if nports <= 0:
+            continue
+        # Derive the bus:port prefix from the hub's own devpath, e.g. "1-1" -> "0:1"
+        bus_dash_port = name
+        try:
+            bus, port = bus_dash_port.split("-", 1)
+        except ValueError:
+            continue
+        bus_prefix = f"{int(bus) - 1}:{port}"  # kernel busnum is 1-based; udev uses 0-based
+        for p in range(1, nports + 1):
+            if _port_is_serial_usable(dev_path, p):
+                ports.add(f"{bus_prefix}.{p}")
+    return sorted(ports)
+
+
+def _autogenerate_config() -> dict:
+    """Create a default multi-slot config matching the Pi's USB topology."""
+    ports = _detect_usb_hub_ports()
+    try:
+        with open("/proc/device-tree/model") as f:
+            model = f.read().rstrip("\x00").strip()
+    except OSError:
+        model = "Unknown"
+
+    slots = []
+    for i, prefix in enumerate(ports, start=1):
+        slots.append({
+            "label": f"SLOT{i}",
+            "usb_prefix": prefix,
+            "tcp_port": 4000 + i,
+            "gdb_port": 3332 + i,
+            "openocd_telnet_port": 4443 + i,
+        })
+    print(f"[portal] auto-detected Pi model: {model}", flush=True)
+    print(f"[portal] auto-detected {len(slots)} USB hub port(s): {ports}",
+          flush=True)
+    return {
+        "gpio_boot": 18,
+        "gpio_en": 17,
+        "slots": slots,
+        "debug_probes": [],
+    }
+
+
 def load_config(path: str) -> dict[str, dict]:
     """Load workbench.json hardware config. All fields default to None/empty.
+
+    If the config file is missing, auto-detect the Pi's USB hub topology
+    and generate a default config on the fly (no file written).  Users
+    who want custom labels/ports/GPIO pins can write workbench.json.
 
     workbench.json provides:
       - gpio_boot: Pi BCM GPIO pin wired to DUT BOOT (None if not wired)
@@ -338,9 +438,18 @@ def load_config(path: str) -> dict[str, dict]:
     _global_config = {"gpio_boot": None, "gpio_en": None, "debug_probes": [],
                       "slot_prefixes": []}
     result: dict[str, dict] = {}
+    cfg = None
     try:
         with open(path) as f:
             cfg = json.load(f)
+    except FileNotFoundError:
+        print(f"[portal] no {path} — auto-detecting USB topology", flush=True)
+        cfg = _autogenerate_config()
+    except Exception as exc:
+        print(f"[portal] config error: {exc} — auto-detecting", flush=True)
+        cfg = _autogenerate_config()
+
+    try:
         if cfg.get("gpio_boot"):
             _global_config["gpio_boot"] = cfg["gpio_boot"]
         if cfg.get("gpio_en"):
@@ -370,10 +479,8 @@ def load_config(path: str) -> dict[str, dict]:
         n_slots = len(cfg.get("slots", []))
         print(f"[portal] config: gpio_boot={gb}, gpio_en={ge}, "
               f"probes={probes}, fixed_slots={n_slots}", flush=True)
-    except FileNotFoundError:
-        print(f"[portal] no config file — GPIO=none, probes=none", flush=True)
     except Exception as exc:
-        print(f"[portal] config error: {exc}", flush=True)
+        print(f"[portal] config parse error: {exc}", flush=True)
     return result
 
 

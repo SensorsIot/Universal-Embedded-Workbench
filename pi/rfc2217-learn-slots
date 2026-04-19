@@ -1,80 +1,136 @@
 #!/usr/bin/env python3
 """
-rfc2217-learn-slots - Discover slot_key for USB serial devices
+rfc2217-learn-slots — Discover USB-port-to-slot mapping on any Raspberry Pi.
 
-Run this tool with a device plugged into a USB hub connector to discover
-the ID_PATH (slot_key) for that physical position.
+Works on Pi Zero 2 W, Pi 3, Pi 4, Pi 5, or anything else.  Plug a device
+into each USB port you want to use as a slot, then run this tool.  It
+prints a ready-to-paste ``workbench.json`` with one slot per detected
+USB hub port, each with a unique TCP and GDB port.
 """
 
-import subprocess
-import sys
 import glob
 import json
+import subprocess
+import sys
 
 
 def get_udev_info(devnode):
-    """Get udev properties for a device."""
     try:
         result = subprocess.run(
-            ['udevadm', 'info', '-q', 'all', devnode],
-            capture_output=True, text=True, check=True
-        )
-        props = {}
-        for line in result.stdout.splitlines():
-            if line.startswith('E: '):
-                key, _, value = line[3:].partition('=')
-                props[key] = value
-        return props
+            ["udevadm", "info", "-q", "all", devnode],
+            capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError:
         return None
+    props = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("E: "):
+            key, _, value = line[3:].partition("=")
+            props[key] = value
+    return props
 
 
 def find_serial_devices():
-    """Find all ttyACM and ttyUSB devices."""
     devices = []
-    for pattern in ['/dev/ttyACM*', '/dev/ttyUSB*']:
+    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*"):
         devices.extend(glob.glob(pattern))
     return sorted(devices)
 
 
-def main():
-    devices = find_serial_devices()
+def pi_model():
+    try:
+        with open("/proc/device-tree/model") as f:
+            return f.read().rstrip("\x00").strip()
+    except OSError:
+        return "Unknown"
 
+
+def extract_usb_prefix(id_path):
+    """Reduce an ID_PATH to the stable hub-port prefix used by usb_prefix.
+
+    Examples:
+      platform-3f980000.usb-usb-0:1.1:1.0     -> 0:1.1  (Pi Zero 2 W, port 1)
+      platform-3f980000.usb-usb-0:1.3.4:1.0   -> 0:1.3  (device behind sub-hub on port 3)
+      pci-0000:01:00.0-usb-0:2.1:1.0          -> 0:2.1  (Pi 4/5 USB3)
+    """
+    idx = id_path.rfind("usb-")
+    if idx == -1:
+        return None
+    tail = id_path[idx + 4:]          # "0:1.3.4:1.0"
+    bus_port, _, _ = tail.partition(":1.0")  # strip the interface suffix
+    # For devices behind sub-hubs (ESP32-S3 dual-USB), keep only the top-level hub port
+    parts = bus_port.split(".")
+    if len(parts) > 2:
+        bus_port = ".".join(parts[:2])  # "0:1.3.4" -> "0:1.3"
+    return bus_port
+
+
+def main():
+    print(f"Raspberry Pi model: {pi_model()}\n")
+
+    devices = find_serial_devices()
     if not devices:
         print("No serial devices found (ttyACM* or ttyUSB*).")
-        print("Plug a device into the USB hub and try again.")
+        print("Plug at least one device into a USB port and try again.")
         sys.exit(1)
 
     print(f"Found {len(devices)} serial device(s):\n")
 
+    slots = []
+    seen_prefixes = {}
     for devnode in devices:
         props = get_udev_info(devnode)
         if not props:
-            print(f"  {devnode}: Could not read udev info")
+            print(f"  {devnode}: could not read udev info")
             continue
+        id_path = props.get("ID_PATH", "")
+        model = props.get("ID_MODEL", "Unknown")
+        serial = props.get("ID_SERIAL_SHORT") or props.get("ID_SERIAL", "?")
+        prefix = extract_usb_prefix(id_path)
 
-        id_path = props.get('ID_PATH', 'N/A')
-        devpath = props.get('DEVPATH', 'N/A')
-        id_model = props.get('ID_MODEL', 'Unknown')
-        id_serial = props.get('ID_SERIAL_SHORT', props.get('ID_SERIAL', 'N/A'))
-
-        print(f"Device: {devnode}")
-        print(f"  Model:    {id_model}")
-        print(f"  Serial:   {id_serial}")
-        print(f"  ID_PATH:  {id_path}")
-        print(f"  DEVPATH:  {devpath}")
+        print(f"  {devnode}")
+        print(f"     model  : {model}")
+        print(f"     serial : {serial}")
+        print(f"     id_path: {id_path}")
+        print(f"     prefix : {prefix}")
         print()
 
-        if id_path != 'N/A':
-            slot_config = {
-                "label": "SLOT?",
-                "slot_key": id_path,
-                "tcp_port": 4001
-            }
-            print(f"  Add to /etc/rfc2217/slots.json:")
-            print(f"    {json.dumps(slot_config)}")
-            print()
+        if not prefix:
+            continue
+        # Deduplicate — dual-USB boards show up twice on the same hub port
+        if prefix in seen_prefixes:
+            continue
+        seen_prefixes[prefix] = True
+
+    # Build suggested config with slots numbered in the order they were discovered
+    for i, prefix in enumerate(sorted(seen_prefixes.keys()), start=1):
+        slots.append({
+            "label": f"SLOT{i}",
+            "usb_prefix": prefix,
+            "tcp_port": 4000 + i,
+            "gdb_port": 3332 + i,
+            "openocd_telnet_port": 4443 + i,
+        })
+
+    if not slots:
+        print("No usable slots discovered.")
+        sys.exit(1)
+
+    config = {
+        "gpio_boot": 18,
+        "gpio_en": 17,
+        "slots": slots,
+        "debug_probes": [],
+    }
+
+    print("=" * 60)
+    print("Suggested /etc/rfc2217/workbench.json:")
+    print("=" * 60)
+    print(json.dumps(config, indent=2))
+    print()
+    print("To install:")
+    print("  sudo cp <paste-to-file>.json /etc/rfc2217/workbench.json")
+    print("  sudo systemctl restart rfc2217-portal")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
