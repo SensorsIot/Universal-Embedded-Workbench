@@ -9,8 +9,8 @@
   },
   "pe4302": {
     "enabled": true,
-    "data_pin": 16,
-    "clk_pin": 20,
-    "le_pin": 21
+    "data_pin": 13,
+    "clk_pin": 12,
+    "le_pin": 6
   }
 }

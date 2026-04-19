@@ -88,7 +88,8 @@ _gpio_lock = threading.Lock()
 _gpio_chip = None       # gpiod.Chip, opened lazily
 _gpio_requests = {}     # pin -> gpiod.LineRequest
 _gpio_directions = {}   # pin -> "output" | "input"
-GPIO_ALLOWED = {5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}  # BCM GPIOs safe for DUT control
+GPIO_ALLOWED = {16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}  # BCM GPIOs safe for DUT control
+# Reserved: GPIO 2/3 = I2C (Si5351), GPIO 5/6 = GPCLK (CW beacon), GPIO 6/12/13 = PE4302 LE/CLK/DATA
 
 # CW beacon (GPCLK hardware clock generator + Morse keying)
 _cw_beacon = CWBeacon()
