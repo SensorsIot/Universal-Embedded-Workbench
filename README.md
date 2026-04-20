@@ -4,7 +4,7 @@
 
 A Raspberry Pi that turns into a complete remote test instrument for ESP32 devices. Plug boards into its USB hub and control everything -- serial, debug, WiFi, BLE, GPIO, firmware updates -- over the network through a single HTTP API.
 
-Zero-config by design: the portal pre-creates 3 fixed slots (SLOT1--SLOT3) at boot, each mapped to a physical USB hub port. Slots are always visible in the web UI even when empty. Plug in a device and it automatically maps to the correct slot by USB path, gets a serial port, chip identification, and OpenOCD for GDB debugging. Dual-USB boards (ESP32-S3 with sub-hub) are handled transparently -- both interfaces map to the same slot.
+Zero-config by design: on boot the portal walks the Pi's USB hub topology and pre-creates one slot per usable hub port (`SLOT1`, `SLOT2`, ...), each mapped to a physical USB connector. The number of slots is determined by the host — typically 3–4 on a Pi Zero 2 W with hub, 4 on a Pi 3B+, 4 on a Pi 4B, 4 on a Pi 5. Slots are always visible in the web UI even when empty. Plug in a device and it automatically maps to the correct slot by USB path, gets a serial port, chip identification, and OpenOCD for GDB debugging. Dual-USB boards (ESP32-S3 with sub-hub) are handled transparently -- both interfaces map to the same slot.
 
 ---
 
@@ -89,10 +89,12 @@ Everything auto-restarts after a flash -- the workbench detects the USB re-enume
 
 **Auto-detection:** The portal walks `/sys/bus/usb/devices/` on startup, finds every downstream USB hub, and creates one slot per hub port. Ports occupied by non-serial devices (USB Ethernet, storage) are filtered out, so only ESP32-usable ports become slots. TCP ports are auto-assigned as `4001 + slot_index`, GDB ports as `3333 + slot_index`.
 
+Some Pi boards advertise more hub ports than are physically wired to USB-A jacks. From sysfs alone these unwired "phantom" ports are indistinguishable from empty wired jacks, so the portal keeps a small per-model phantom table keyed on `/proc/device-tree/model` (`_PHANTOM_PORTS_BY_MODEL` in `pi/portal.py`). Add an entry there if you find a new phantom on a model not yet listed.
+
 | Pi model | Expected slots | Notes |
 |----------|---------------|-------|
 | Pi Zero 2 W + external hub | 3–4 (external hub ports minus ethernet) | Tested |
-| Pi 3 B+ | 3 (4-port internal hub; ethernet PHY on one port is skipped) | Same kernel API, expected to work |
+| Pi 3 B+ | 4 | Phantom port `0:1.4` filtered via model table (tested on Rev 1.3) |
 | Pi 4 B | 2 USB2 + 2 USB3 slots | Same kernel API, expected to work |
 | Pi 5 | Up to 4 slots on XHCI | Same kernel API, expected to work |
 
@@ -137,7 +139,7 @@ eth0 carries all management traffic (HTTP API, RFC2217 serial). wlan0 is dedicat
 
 ### 1. Remote Serial (RFC2217)
 
-Each physical USB hub port is mapped to a fixed slot (SLOT1--SLOT3) via USB path prefix in `workbench.json`. The same port always gets the same slot label and TCP port. Dual-USB boards (ESP32-S3 with built-in hub) expose multiple interfaces on the same slot. One RFC2217 client at a time per device.
+Each physical USB hub port is mapped to a slot (`SLOT1`, `SLOT2`, ...) via USB path prefix. Slots are auto-detected from the Pi's USB topology on startup; the count matches the number of wired ports for that model (see the hardware table above). An optional `workbench.json` can override labels or pin specific TCP/GDB ports. The same port always gets the same slot label and TCP port. Dual-USB boards (ESP32-S3 with built-in hub) expose multiple interfaces on the same slot. One RFC2217 client at a time per device.
 
 Works with esptool, PlatformIO, ESP-IDF, and any pyserial-based tool.
 

@@ -179,7 +179,7 @@ that disables the WiFi test service entirely (see §1.4).
 
 | Entity | Description |
 |--------|-------------|
-| **Slot** | One of 3 fixed positions (SLOT1–SLOT3) pre-created at boot from `workbench.json`. Each slot is mapped to a physical USB hub port by prefix match and is always visible in the UI. A slot can track multiple devnodes when a dual-USB board (e.g., ESP32-S3 with sub-hub) is connected. |
+| **Slot** | A fixed position (`SLOT1`, `SLOT2`, ..., `SLOTn`) pre-created at boot. The slot count `n` is determined at startup by auto-detection of the Pi's USB hub topology (one slot per usable hub port, see FR-002), or by explicit configuration in `workbench.json` if present. Each slot is mapped to a physical USB hub port by prefix match and is always visible in the UI. A slot can track multiple devnodes when a dual-USB board (e.g., ESP32-S3 with sub-hub) is connected. |
 | **slot_key** | Stable identifier for physical port topology (derived from udev `ID_PATH`). Multiple slot_keys can map to the same slot via prefix matching (e.g., `0:1.1:1.0` and `0:1.1.4:1.0` both match SLOT1's prefix `0:1.1`). |
 | **usb_prefix** | Substring of `ID_PATH` that identifies a physical hub port (configured in `workbench.json`). Longer prefixes match first, so a sub-hub port like `0:1.1.4` can be distinguished from its parent `0:1.1`. |
 | **devnode** | Current tty device path (e.g., `/dev/ttyACM0`) — may change on reconnect |
@@ -229,11 +229,14 @@ USB-Serial/JTAG controller disconnects and reconnects.  This triggers a
 the proxy is stopped on `remove` and restarted on `add` (with the 2s
 ttyACM boot delay).  No manual intervention is required.
 
-**Fixed slot pre-creation:** On startup, the portal loads slot definitions from
-`workbench.json` and pre-creates 3 fixed slots (SLOT1–SLOT3), each with a
-`usb_prefix` that maps to a physical USB hub port. Slots are always visible
-in `/api/devices` and the web UI, even when no devices are connected
-(state = `absent`).
+**Fixed slot pre-creation:** On startup the portal produces a slot list,
+either by loading `workbench.json` (if present) or by auto-detecting the
+Pi's USB hub topology (see "Auto-detection" below). The result is `n`
+slots labelled `SLOT1..SLOTn`, each with a `usb_prefix` that maps to a
+physical USB hub port. `n` is hardware-dependent, not hard-coded — a Pi
+Zero 2 W with a 4-port hub yields 3–4 slots, a Pi 3B+ yields 4, a Pi 4B
+or Pi 5 yields 4. Slots are always visible in `/api/devices` and the web
+UI, even when no devices are connected (state = `absent`).
 
 **USB prefix matching:** When a device's `slot_key` (from udev `ID_PATH`)
 contains a slot's `usb_prefix`, that device belongs to that slot. Longer
@@ -283,6 +286,27 @@ Configuration file: `/etc/rfc2217/workbench.json`
 The `usb_prefix` is a substring of the udev `ID_PATH`. Discover it by
 plugging a device into each physical port and running:
 `udevadm info -q property -n /dev/ttyACMx | grep ID_PATH`
+
+**Auto-detection (no config):** If `/etc/rfc2217/workbench.json` is absent,
+the portal auto-generates the slot list at startup by walking
+`/sys/bus/usb/devices/`, enumerating every downstream hub, and emitting one
+slot per port (`SLOT1..SLOTn` with default TCP/GDB/OpenOCD ports). Ports
+bound to non-serial drivers (USB Ethernet, storage, HID) are filtered out.
+
+**Phantom-port filter:** Some Pi boards advertise more hub ports than the
+PCB wires to physical USB-A jacks. An unwired port is indistinguishable
+from an empty wired jack via sysfs alone, so `pi/portal.py` keeps a
+per-model lookup table (`_PHANTOM_PORTS_BY_MODEL`) keyed on
+`/proc/device-tree/model` that names the unwired `usb_prefix` values to
+skip. Current entries:
+
+| Pi model | Phantom prefix(es) |
+|----------|--------------------|
+| Raspberry Pi 3 Model B Plus | `0:1.4` |
+
+Adding a new model: plug devices into every physical jack, compare
+`[portal] auto-detected N USB hub port(s): [...]` against the occupied
+jack count, and add any unoccupied prefix(es) to the table.
 
 ### FR-003 — Serial API
 
@@ -2225,6 +2249,60 @@ wt.debug_stop("SLOT1")
 
 All alternatives use the same portal API — only the OpenOCD interface config
 changes.
+
+### FR-027 — Signal Generator (RF Source + Step Attenuator)
+
+Unified RF-source service that emits a continuous carrier, optionally
+Morse-keyed, with programmable step attenuation. Supersedes the narrower
+CW-beacon API (FR-023) by adding an I2C clock-generator backend and a
+serial-controlled attenuator while preserving GPCLK as a fallback path.
+
+#### 27.1 Backends
+
+| Backend | Hardware | Frequency range | Notes |
+|---------|----------|-----------------|-------|
+| `si5351` | Si5351A on I2C1 (GPIO 2 SDA, GPIO 3 SCL), 3 channels (`clk0..clk2`) | ~8 kHz – 160 MHz | Preferred; arbitrary frequency |
+| `gpclk` | BCM2835 GPCLK2 on GPIO 6 (alt GPCLK1 on GPIO 5) | Discrete PLLD/N only | Fallback; same substrate as FR-023 |
+| `auto` | Prefers `si5351` if the chip ACKs on I2C; falls back to `gpclk` | — | Default |
+
+#### 27.2 Attenuator
+
+PE4302 RF step attenuator, 3-wire serial mode (DATA = GPIO 13, CLK = GPIO
+12, LE = GPIO 6). Range 0 – 31.5 dB in 0.5 dB steps. Board jumpers: close
+J4, open J5/J6/J7 to enable serial mode.
+
+**Pin conflict:** LE shares GPIO 6 with GPCLK2. When the `gpclk` backend
+is active the attenuator's LE line is unavailable; only the `si5351`
+backend can be combined with live attenuation control.
+
+#### 27.3 API
+
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| POST | /api/siggen/start | `{freq_hz, backend?, channel?, atten_db?, morse?}` | Start carrier; optional Morse keying |
+| POST | /api/siggen/stop | — | Stop carrier |
+| POST | /api/siggen/atten | `{db}` | Set PE4302 attenuation (0–31.5 dB) |
+
+Parameters:
+
+- `freq_hz` (int, required) — carrier frequency in Hz.
+- `backend` (string, optional) — `auto` (default) | `si5351` | `gpclk`.
+- `channel` (string, optional) — Si5351 output, `clk0` (default) | `clk1` | `clk2`.
+- `atten_db` (float, optional) — initial PE4302 setting.
+- `morse` (object, optional) — `{text, wpm}`; if present, keys the carrier
+  using the same PARIS-standard timing as FR-023.
+
+#### 27.4 Configuration
+
+`/etc/rfc2217/signalgen.json` (installed by `pi/install.sh` from
+`pi/config/signalgen.json`):
+
+```json
+{
+  "si5351": {"i2c_bus": 1, "address": "0x60"},
+  "pe4302": {"gpio_le": 6, "gpio_clk": 12, "gpio_data": 13}
+}
+```
 
 ---
 

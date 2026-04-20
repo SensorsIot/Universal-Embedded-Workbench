@@ -109,7 +109,7 @@ When a workbench is available. Use serial flashing when:
 
 ### Discover devices and slot
 
-Slots are mapped to physical USB hub ports via prefix matching (configured in `workbench.json`). There are 3 fixed slots: SLOT1 (:4001), SLOT2 (:4002), SLOT3 (:4003). Always read the slot info from `/api/devices` to verify the device is present.
+Slots are mapped to physical USB hub ports via prefix matching. The portal auto-detects the slot count from the Pi's USB topology at startup (typically 3–4); `workbench.json` is optional and only needed for custom labels/ports. Slot labels are `SLOT1`, `SLOT2`, ..., `SLOTn`; TCP ports are `4000 + slot_index` (e.g. SLOT1 = :4001). Always read slot info from `/api/devices` to learn the actual layout and verify the device is present.
 
 ```bash
 curl -s http://workbench.local:8080/api/devices | jq .

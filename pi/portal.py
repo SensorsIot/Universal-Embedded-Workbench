@@ -352,6 +352,27 @@ def _port_is_serial_usable(hub_dev_path: str, port_num: int) -> bool:
     return bool(drivers & serial_drivers) or not drivers
 
 
+# Per-model USB ports that hubs advertise but the board never wires to a
+# connector. An unwired port is indistinguishable from an empty wired jack
+# via sysfs alone (both have no child device), so the only reliable way to
+# exclude them is a lookup keyed on /proc/device-tree/model.
+_PHANTOM_PORTS_BY_MODEL: dict[str, set[str]] = {
+    "Raspberry Pi 3 Model B Plus": {"0:1.4"},
+}
+
+
+def _phantom_ports_for_pi() -> set[str]:
+    try:
+        with open("/proc/device-tree/model") as f:
+            model = f.read().rstrip("\x00").strip()
+    except OSError:
+        return set()
+    for prefix, phantoms in _PHANTOM_PORTS_BY_MODEL.items():
+        if model.startswith(prefix):
+            return phantoms
+    return set()
+
+
 def _detect_usb_hub_ports() -> list[str]:
     """Enumerate external-facing USB hub ports on the Pi.
 
@@ -363,6 +384,7 @@ def _detect_usb_hub_ports() -> list[str]:
     Returns a sorted list of usb_prefix strings (e.g. "0:1.1", "0:2.1").
     """
     import glob as _glob
+    phantoms = _phantom_ports_for_pi()
     ports: set[str] = set()
     for dev_path in _glob.glob("/sys/bus/usb/devices/*"):
         # Skip root hubs (usb1, usb2) — we want downstream hubs only
@@ -387,8 +409,11 @@ def _detect_usb_hub_ports() -> list[str]:
             continue
         bus_prefix = f"{int(bus) - 1}:{port}"  # kernel busnum is 1-based; udev uses 0-based
         for p in range(1, nports + 1):
+            prefix = f"{bus_prefix}.{p}"
+            if prefix in phantoms:
+                continue
             if _port_is_serial_usable(dev_path, p):
-                ports.add(f"{bus_prefix}.{p}")
+                ports.add(prefix)
     return sorted(ports)
 
 

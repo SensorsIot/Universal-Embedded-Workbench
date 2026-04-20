@@ -1,6 +1,6 @@
-# Serial Portal - Raspberry Pi Setup
+# Embedded Workbench — Raspberry Pi Setup
 
-RFC2217 serial portal that provides network access to USB serial devices. Supports automatic proxy management via udev hotplug, WiFi testing instrument, BLE proxy, MQTT broker, traffic sniffer, and ESP32-C3 native USB flashing.
+Raspberry Pi-based test instrument for ESP32 firmware: RFC2217 serial proxy with automatic udev hotplug, WiFi testing (AP/STA), BLE proxy, MQTT broker, GDB/JTAG debugging via OpenOCD, traffic sniffer, and RF signal generator (Si5351 + PE4302).
 
 ## SD Card Rebuild (from scratch)
 
@@ -76,29 +76,37 @@ cd Universal-ESP32-Workbench/pi
 sudo bash install.sh
 ```
 
-### Step 4: Configure USB slots
+### Step 4: (Optional) Pin USB slots
 
-Plug in your ESP32 devices, then discover the USB topology:
+Slots are **auto-detected** from the Pi's USB hub topology at portal startup — no configuration is required. Skip ahead to Step 5 unless you need custom labels, fixed TCP/GDB port numbers, a GPIO probe definition, or you want to exclude ports that the hub chip reports but your board doesn't wire.
+
+To pin the layout, plug your ESP32s in and snapshot the USB topology:
 
 ```bash
 rfc2217-learn-slots
 ```
 
-Edit the slot config with your actual slot keys:
+Then edit:
 ```bash
-sudo nano /etc/rfc2217/slots.json
+sudo nano /etc/rfc2217/workbench.json
 ```
 
-Example for the current board:
+Current schema (prefix-based matching — see FR-002 in the FSD):
 ```json
 {
+  "gpio_boot": 18,
+  "gpio_en": 17,
   "slots": [
-    {"label": "SLOT1", "slot_key": "platform-3f980000.usb-usb-0:1.1.2:1.0", "tcp_port": 4001, "gpio_boot": 18, "gpio_en": 17},
-    {"label": "SLOT2", "slot_key": "platform-3f980000.usb-usb-0:1.1.4:1.0", "tcp_port": 4002},
-    {"label": "SLOT3", "slot_key": "platform-3f980000.usb-usb-0:1.4:1.0", "tcp_port": 4003}
-  ]
+    {"label": "SLOT1", "usb_prefix": "0:1.1.2", "tcp_port": 4001, "gdb_port": 3333, "openocd_telnet_port": 4444},
+    {"label": "SLOT2", "usb_prefix": "0:1.1.3", "tcp_port": 4002, "gdb_port": 3334, "openocd_telnet_port": 4445},
+    {"label": "SLOT3", "usb_prefix": "0:1.2",   "tcp_port": 4003, "gdb_port": 3335, "openocd_telnet_port": 4446},
+    {"label": "SLOT4", "usb_prefix": "0:1.3",   "tcp_port": 4004, "gdb_port": 3336, "openocd_telnet_port": 4447}
+  ],
+  "debug_probes": []
 }
 ```
+
+The number of slot entries depends on your Pi model: Pi Zero 2 W with external hub → 3–4; Pi 3B+ / 4B / 5 → 4. Use whatever `rfc2217-learn-slots` reports.
 
 Restart the portal:
 ```bash
@@ -129,12 +137,15 @@ sudo bash install.sh --update
 
 ## Architecture
 
+One slot is auto-created per wired USB hub port on the host Pi (`SLOT1`, `SLOT2`, ..., `SLOTn`). TCP proxy ports are assigned as `4000 + slot_index`, GDB/OpenOCD as `3332 + slot_index` / `4443 + slot_index`. Example on a 4-slot host:
+
 ```
 USB Hub Slots              Portal (:8080)              Clients
 ─────────────              ──────────────              ───────
-SLOT1 (ttyACM0) ──► plain_rfc2217_server :4001 ◄──── esptool / pyserial
-SLOT2 (ttyACM1) ──► plain_rfc2217_server :4002 ◄──── esptool / pyserial
-SLOT3 (ttyUSB0) ──► plain_rfc2217_server :4003 ◄──── esptool / pyserial
+SLOT1 (ttyACM/USB) ──► plain_rfc2217_server :4001 ◄──── esptool / pyserial
+SLOT2 (ttyACM/USB) ──► plain_rfc2217_server :4002 ◄──── esptool / pyserial
+SLOT3 (ttyACM/USB) ──► plain_rfc2217_server :4003 ◄──── esptool / pyserial
+SLOT4 (ttyACM/USB) ──► plain_rfc2217_server :4004 ◄──── esptool / pyserial
 ```
 
 ## Components

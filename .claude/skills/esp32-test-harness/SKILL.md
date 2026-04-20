@@ -75,7 +75,7 @@ wt.test_end()
 | DUT WiFi (portal) | 192.168.4.1 | DUT in captive portal AP mode |
 | MQTT broker | 192.168.4.1:1883 | Mosquitto on Pi (via WiFi Tester AP) |
 
-Slots are mapped to physical USB hub ports via prefix matching (configured in `workbench.json`). There are 3 fixed slots: SLOT1 (:4001), SLOT2 (:4002), SLOT3 (:4003). **Always discover the DUT slot at runtime** using `wt.get_devices()` -- verify the device is present before using it.
+Slots are mapped to physical USB hub ports via prefix matching. The portal auto-detects the slot count from the Pi's USB topology at startup (typically 3–4); `workbench.json` is optional and only needed for custom labels/ports. Slot labels are `SLOT1`, `SLOT2`, ..., `SLOTn`; TCP ports are `4000 + slot_index` (e.g. SLOT1 = :4001). **Always discover the DUT slot at runtime** using `wt.get_devices()` -- never hard-code a label or port.
 
 ### MQTT Broker (mosquitto on Pi)
 
