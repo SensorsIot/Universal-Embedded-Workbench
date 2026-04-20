@@ -1,10 +1,10 @@
 {
-    "name": "Universal-ESP32-Tester - Python Development",
+    "name": "Universal Embedded Workbench - Python Development",
     "build": {
         "dockerfile": "Dockerfile",
         "context": ".."
     },
-    "workspaceFolder": "/workspaces/Universal-ESP32-Tester",
+    "workspaceFolder": "/workspaces/Universal-Embedded-Workbench",
     "customizations": {
         "vscode": {
             "extensions": [
@@ -37,6 +37,7 @@
             "version": "latest"
         }
     },
+    "runArgs": ["--name", "universal-embedded-workbench"],
     "appPort": ["2222:2222"],
     "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && (git clone https://github.com/SensorsIot/claude.git ~/.claude 2>/dev/null || (cd ~/.claude && git pull)) && mkdir -p ~/.claude-data/projects && ln -sf ~/.claude-data/.credentials.json ~/.claude/.credentials.json && ln -sf ~/.claude-data/history.jsonl ~/.claude/history.jsonl && rm -rf ~/.claude/projects && ln -sf ~/.claude-data/projects ~/.claude/projects && ln -sf ~/.claude-data/.claude.json ~/.claude.json && npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && pip install -r requirements-dev.txt 2>/dev/null || pip install pyserial",
     "remoteUser": "dev",

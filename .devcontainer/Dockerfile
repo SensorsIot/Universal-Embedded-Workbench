@@ -29,4 +29,7 @@ RUN mkdir -p /home/dev/.ssh \
     && chmod 600 /home/dev/.ssh/config \
     && chown -R dev:dev /home/dev/.ssh
 
+# Auto-cd to workspace for SSH sessions
+RUN echo 'cd /workspaces/Universal-Embedded-Workbench 2>/dev/null' >> /home/dev/.bashrc
+
 USER dev

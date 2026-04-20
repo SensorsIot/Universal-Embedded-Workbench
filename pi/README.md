@@ -69,8 +69,8 @@ free -h                       # should show ~480 MB total + swap
 
 ```bash
 # Clone the repo
-git clone https://github.com/SensorsIot/Universal-ESP32-Workbench.git
-cd Universal-ESP32-Workbench/pi
+git clone https://github.com/SensorsIot/Universal-Embedded-Workbench.git
+cd Universal-Embedded-Workbench/pi
 
 # Install everything
 sudo bash install.sh

@@ -1,4 +1,4 @@
-# Universal-ESP32-Tester
+# Universal Embedded Workbench
 
 Raspberry Pi-based test instrument for ESP32 firmware: serial proxy (RFC2217), WiFi AP/STA, GPIO control, HTTP relay, all via REST API.
 

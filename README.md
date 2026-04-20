@@ -13,8 +13,8 @@ Zero-config by design: on boot the portal walks the Pi's USB hub topology and pr
 ### Installation
 
 ```bash
-git clone https://github.com/SensorsIot/Universal-ESP32-Workbench.git
-cd Universal-ESP32-Workbench/pi
+git clone https://github.com/SensorsIot/Universal-Embedded-Workbench.git
+cd Universal-Embedded-Workbench/pi
 sudo bash install.sh
 ```
 
@@ -290,7 +290,7 @@ monitor_port = rfc2217://workbench.local:4001
 ### pytest Driver
 
 ```bash
-pip install -e Universal-ESP32-Workbench/pytest
+pip install -e Universal-Embedded-Workbench/pytest
 ```
 
 ```python

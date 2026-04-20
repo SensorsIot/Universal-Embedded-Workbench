@@ -128,7 +128,7 @@ All test operations use `WorkbenchDriver`. Set `PYTHONPATH` to import it:
 
 ```python
 import sys
-sys.path.insert(0, "/tmp/Universal-ESP32-Tester/pytest")
+sys.path.insert(0, "/tmp/Universal-Embedded-Workbench/pytest")
 from workbench_driver import WorkbenchDriver
 
 wt = WorkbenchDriver("http://192.168.0.87:8080")
@@ -137,7 +137,7 @@ wt = WorkbenchDriver("http://192.168.0.87:8080")
 Or from bash one-liners:
 
 ```bash
-PYTHONPATH=/tmp/Universal-ESP32-Tester/pytest python3 -c "
+PYTHONPATH=/tmp/Universal-Embedded-Workbench/pytest python3 -c "
 from workbench_driver import WorkbenchDriver
 wt = WorkbenchDriver('http://192.168.0.87:8080')
 # ... operations ...

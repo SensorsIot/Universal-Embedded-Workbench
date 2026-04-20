@@ -55,7 +55,7 @@ Steps 1–7 handle firmware integration. Steps 8–12 write FSD sections 7–10.
 
 ## Template Reference
 
-All template code lives in `Universal-ESP32-Workbench/test-firmware/`. When adding modules, copy from these templates and customize project-specific values:
+All template code lives in `Universal-Embedded-Workbench/test-firmware/`. When adding modules, copy from these templates and customize project-specific values:
 
 | Module | Template source | Customization |
 |--------|----------------|---------------|
