@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .claude-data/
+.claude/settings.local.json
 *.log
 
 # ESP-IDF build artifacts
