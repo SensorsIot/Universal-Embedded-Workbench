@@ -106,6 +106,12 @@ Each phase includes:
 - UUIDs, endpoints, topics, pinouts
 - Timing diagrams, sequence descriptions
 - Example logs, traces, payloads
+
+## 11. Related
+- `[[wikilinks]]` to dependency / peer docs (other FSDs, ADRs, runbooks).
+- Use path-style links (e.g. `[[<repo>/docs/foo]]`) when targeting docs in
+  other projects via the Obsidian meta-vault; bare names work within the repo.
+- Omit if there are genuinely no related docs at the time of writing.
 ```
 
 ## Section Inclusion Rules
@@ -117,5 +123,9 @@ Not every section applies to every project. The skill must:
   custom protocols
 - **Include if complexity >= Medium**: Section 9 (Troubleshooting), full Appendix
 - **Include if complexity = High**: All sections, fully expanded
+- **Section 11 (Related)**: recommended, not mandatory. Include when there are
+  related FSDs/ADRs/runbooks worth linking; omit if there are none yet. In evolve
+  mode, ensure the section exists (add if missing) but do not modify existing
+  wikilinks unless the delta names them.
 - **Omit empty sections** rather than writing "N/A" -- but note the omission reason
   in a comment if it might confuse readers

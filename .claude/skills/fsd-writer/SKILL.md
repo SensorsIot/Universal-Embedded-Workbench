@@ -317,7 +317,7 @@ From extracted requirements:
 
 ## 7. Canonical FSD Structure
 
-All generated or updated FSDs must conform to the canonical structure (Sections 1-10: System Overview, Architecture, Phases, Requirements, Risks, Interfaces, Operational Procedures, V&V, Troubleshooting, Appendix). For the full template with all subsections and section inclusion rules, read `references/canonical-fsd-structure.md`.
+All generated or updated FSDs must conform to the canonical structure (Sections 1-11: System Overview, Architecture, Phases, Requirements, Risks, Interfaces, Operational Procedures, V&V, Troubleshooting, Appendix, Related). Section 11 is recommended (not mandatory): a list of `[[wikilinks]]` to related FSDs/ADRs/runbooks for Obsidian-vault navigation. For the full template with all subsections and section inclusion rules, read `references/canonical-fsd-structure.md`.
 
 ## 8. Traceability Matrix (Mandatory)
 
