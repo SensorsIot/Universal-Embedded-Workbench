@@ -3,9 +3,9 @@
 Drives a clean PLLD-sourced square wave on GPIO 5 (GPCLK1) or GPIO 6 (GPCLK2)
 with an integer divider.  Keying is done at the GPIO function-select level:
 ALT0 connects the clock to the pin, INPUT disconnects it (high-Z, glitch-free).
-
-Extracted from cw_beacon.py so the Si5351 backend can share the same Morse
-keyer plumbing.
+Used as the GPCLK fallback backend of the unified signal generator
+(see ``signal_generator.py``); the Morse keyer (``morse.py``) gates this
+backend the same way it gates the Si5351 backend.
 """
 
 import time

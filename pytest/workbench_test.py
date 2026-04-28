@@ -351,69 +351,73 @@ class TestWiFiScan:
 
 
 # =====================================================================
-# WT-13xx  CW Beacon
+# WT-13xx  Signal Generator (Si5351 + PE4302, GPCLK fallback)
 # =====================================================================
 
 
-class TestCWBeacon:
-    """WT-13xx: CW beacon (GPCLK Morse transmitter) tests."""
+class TestSiggen:
+    """WT-13xx: signal generator tests against /api/siggen/*."""
 
     def test_wt1300_start_and_status(self, workbench):
-        """WT-1300: Start beacon and verify status shows active."""
-        result = workbench.cw_start(
-            freq=3_571_000, message="VVV", wpm=15)
-        assert result["pin"] == 5
-        assert result["divider"] == 140
-        assert abs(result["freq_hz"] - 3_571_428.57) < 1
-        assert result["message"] == "VVV"
-        assert result["wpm"] == 15
-        assert result["repeat"] is True
+        """WT-1300: Start carrier and verify status shows active."""
+        result = workbench.siggen_start(freq_hz=3_500_000)
+        assert result["active"] is True
+        assert result["backend"] in ("si5351", "gpclk")
+        assert result["freq_hz"] > 0
 
-        status = workbench.cw_status()
+        status = workbench.siggen_status()
         assert status["active"] is True
-        assert status["pin"] == 5
+        assert status["backend"] == result["backend"]
         assert status["freq_hz"] == result["freq_hz"]
 
-        workbench.cw_stop()
+        workbench.siggen_stop()
 
     def test_wt1301_stop(self, workbench):
-        """WT-1301: Stop beacon and verify status shows inactive."""
-        workbench.cw_start(freq=3_571_000, message="T", wpm=20)
-        workbench.cw_stop()
+        """WT-1301: Stop carrier and verify status shows inactive."""
+        workbench.siggen_start(freq_hz=3_571_000)
+        workbench.siggen_stop()
 
-        status = workbench.cw_status()
+        status = workbench.siggen_status()
         assert status["active"] is False
 
     def test_wt1302_frequency_list(self, workbench):
         """WT-1302: Frequency list returns valid entries in range."""
-        freqs = workbench.cw_frequencies(low=3_500_000, high=4_000_000)
+        freqs = workbench.siggen_frequencies(
+            low=3_500_000, high=4_000_000, backend="gpclk")
         assert len(freqs) > 0
         for f in freqs:
             assert "divider" in f
             assert "freq_hz" in f
             assert 3_500_000 <= f["freq_hz"] <= 4_000_000
-            assert 2 <= f["divider"] <= 4095
-        # Verify sorted by divider (ascending = freq descending)
-        dividers = [f["divider"] for f in freqs]
-        assert dividers == sorted(dividers)
 
-    def test_wt1303_invalid_pin_rejected(self, workbench):
-        """WT-1303: Pin without GPCLK is rejected."""
-        with pytest.raises(CommandError):
-            workbench.cw_start(freq=3_571_000, message="T", pin=17)
+    def test_wt1303_morse_keying(self, workbench):
+        """WT-1303: Morse-keyed start records message in status."""
+        workbench.siggen_start(
+            freq_hz=3_571_000,
+            morse={"message": "VVV DE TEST", "wpm": 15, "repeat": True})
+        status = workbench.siggen_status()
+        assert status["active"] is True
+        assert status["morse"]["message"] == "VVV DE TEST"
+        assert status["morse"]["wpm"] == 15
+
+        workbench.siggen_stop()
 
     def test_wt1304_replaces_previous(self, workbench):
-        """WT-1304: Starting a new beacon replaces the previous one."""
-        workbench.cw_start(freq=3_571_000, message="AAA", wpm=10)
-        workbench.cw_start(freq=3_597_000, message="BBB", wpm=20)
+        """WT-1304: Starting a new carrier replaces the previous one."""
+        workbench.siggen_start(
+            freq_hz=3_571_000,
+            morse={"message": "AAA", "wpm": 10, "repeat": True})
+        result2 = workbench.siggen_start(
+            freq_hz=3_597_000,
+            morse={"message": "BBB", "wpm": 20, "repeat": True})
 
-        status = workbench.cw_status()
+        status = workbench.siggen_status()
         assert status["active"] is True
-        assert status["message"] == "BBB"
-        assert status["wpm"] == 20
-        assert status["divider"] == 139  # 500MHz / 139 ≈ 3.597 MHz
+        assert status["morse"]["message"] == "BBB"
+        assert status["morse"]["wpm"] == 20
+        assert status["freq_hz"] == result2["freq_hz"]
 
-        workbench.cw_stop()
+        workbench.siggen_stop()
 
 
 # =====================================================================
@@ -980,7 +984,6 @@ class TestEndToEnd:
         assert dev, "No device connected"
 
         chip = dev.get("debug_chip", "")
-        url = dev.get("url", "")
         slot = dev.get("label", "")
 
         if not chip:

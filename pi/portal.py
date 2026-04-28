@@ -8,6 +8,7 @@ Hardware config loaded from workbench.json (GPIO pins, debug probes).
 """
 
 import http.server
+import collections
 import json
 import os
 import signal
@@ -19,9 +20,9 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
-import wifi_controller
-from cw_beacon import CWBeacon
 import debug_controller
+import gpiod
+import wifi_controller
 try:
     import ble_controller
 except ImportError:
@@ -65,7 +66,6 @@ host_ip: str = "127.0.0.1"  # refreshed periodically; see _refresh_host_ip()
 hostname: str = "localhost"
 
 # Activity log — recent operations visible in UI
-import collections
 activity_log: collections.deque = collections.deque(maxlen=200)
 _enter_portal_running: bool = False
 
@@ -82,17 +82,12 @@ _test_lock = threading.Lock()
 _test_session = None  # dict or None; see _handle_test_update for schema
 
 # GPIO control — drive Pi GPIO pins from test scripts (e.g. hold DUT GPIO low)
-import gpiod
-
 _gpio_lock = threading.Lock()
 _gpio_chip = None       # gpiod.Chip, opened lazily
 _gpio_requests = {}     # pin -> gpiod.LineRequest
 _gpio_directions = {}   # pin -> "output" | "input"
 GPIO_ALLOWED = {16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}  # BCM GPIOs safe for DUT control
-# Reserved: GPIO 2/3 = I2C (Si5351), GPIO 5/6 = GPCLK (CW beacon), GPIO 6/12/13 = PE4302 LE/CLK/DATA
-
-# CW beacon (GPCLK hardware clock generator + Morse keying)
-_cw_beacon = CWBeacon()
+# Reserved: GPIO 2/3 = I2C (Si5351), GPIO 5/6 = GPCLK, GPIO 6/12/13 = PE4302 LE/CLK/DATA
 
 # Unified signal generator (Si5351 / PE4302 with GPCLK fallback)
 try:
@@ -1566,11 +1561,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_debug_probes()
         elif path == "/api/debug/group":
             self._handle_debug_group()
-        elif path == "/api/cw/status":
-            self._handle_cw_status()
-        elif path == "/api/cw/frequencies":
-            qs = parse_qs(parsed.query)
-            self._handle_cw_frequencies(qs)
         elif path == "/api/siggen/status":
             self._handle_siggen_status()
         elif path == "/api/siggen/frequencies":
@@ -1640,10 +1630,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_debug_start()
         elif path == "/api/debug/stop":
             self._handle_debug_stop()
-        elif path == "/api/cw/start":
-            self._handle_cw_start()
-        elif path == "/api/cw/stop":
-            self._handle_cw_stop()
         elif path == "/api/siggen/start":
             self._handle_siggen_start()
         elif path == "/api/siggen/stop":
@@ -2820,41 +2806,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             }
         self._send_json({"ok": True, "groups": groups})
 
-    # -- CW beacon handlers --
-
-    def _handle_cw_start(self):
-        body = self._read_json()
-        if not body:
-            self._send_json({"ok": False, "error": "empty body"}, 400)
-            return
-        pin = body.get("pin", 5)
-        freq = body.get("freq")
-        message = body.get("message", "")
-        wpm = body.get("wpm", 15)
-        repeat = body.get("repeat", True)
-        if freq is None:
-            self._send_json({"ok": False, "error": "missing freq"}, 400)
-            return
-        result = _cw_beacon.start(pin, freq, message, wpm, repeat)
-        if result.get("ok"):
-            log_activity(f"CW beacon started: {result['freq_hz']:.0f} Hz, "
-                         f"{wpm} WPM, pin {pin}", "ok")
-        self._send_json(result)
-
-    def _handle_cw_stop(self):
-        result = _cw_beacon.stop()
-        log_activity("CW beacon stopped", "info")
-        self._send_json(result)
-
-    def _handle_cw_status(self):
-        self._send_json({"ok": True, **_cw_beacon.status()})
-
-    def _handle_cw_frequencies(self, qs):
-        low = int(qs.get("low", [3_500_000])[0])
-        high = int(qs.get("high", [4_000_000])[0])
-        freqs = _cw_beacon.list_frequencies(low, high)
-        self._send_json({"ok": True, "frequencies": freqs})
-
     # -- signal generator handlers (Si5351 + PE4302 with GPCLK fallback) --
 
     def _siggen_unavailable(self):
@@ -3691,7 +3642,6 @@ def main():
     except KeyboardInterrupt:
         print("[portal] shutting down", flush=True)
         debug_controller.shutdown()
-        _cw_beacon.shutdown()
         if _siggen is not None:
             _siggen.shutdown()
         _udp_shutdown.set()

@@ -233,6 +233,9 @@ Unified RF source with programmable frequency, attenuation, and optional Morse k
 - **Si5351** (I²C clock generator on GPIO 2/3) — 8 kHz to 160 MHz, three independent channels (CLK0–CLK2), precise fractional synthesis. Preferred when detected on I²C.
 - **GPCLK** (BCM2835 hardware clock on GPIO 5/6) — 122 kHz to 250 MHz in integer-divider steps from 500 MHz PLLD. Always available, no extra hardware.
 
+The Si5351 backend programs active CLK outputs at the lowest drive-current
+setting, 2 mA. Use the PE4302 path for precise RF level control.
+
 Optional **PE4302** digital step attenuator (0–31.5 dB in 0.5 dB steps) can sit in the RF path, controlled via 3-wire serial on GPIO 6/12/13. Works with either backend. If not installed, attenuation calls return a clean error.
 
 Both backends share a Morse keyer, so you can key any carrier with a CW message — useful for direction-finder beacons, sensitivity tests, or field-day practice. Without a `morse` argument, the carrier runs continuous.
@@ -337,10 +340,6 @@ wt.ble_connect(devices[0]["address"])
 wt.ble_write("6e400002-b5a3-f393-e0a9-e50e24dcca9e", b"\x02Hello")
 wt.ble_disconnect()
 
-# CW beacon (legacy GPCLK-only)
-wt.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
-wt.cw_stop()
-
 # Signal generator — continuous carrier
 wt.siggen_start(freq_hz=3_500_000, backend="si5351")
 wt.siggen_atten(db=12.0)                 # attenuate via PE4302
@@ -416,13 +415,6 @@ curl -X POST http://workbench.local:8080/api/ble/write \
   -H "Content-Type: application/json" \
   -d '{"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","data":"0248656c6c6f"}'
 curl -X POST http://workbench.local:8080/api/ble/disconnect
-
-# CW beacon (legacy GPCLK-only)
-curl -X POST http://workbench.local:8080/api/cw/start \
-  -H "Content-Type: application/json" \
-  -d '{"freq": 3571000, "message": "VVV DE TEST", "wpm": 12}'
-curl http://workbench.local:8080/api/cw/frequencies?low=3500000&high=4000000
-curl -X POST http://workbench.local:8080/api/cw/stop
 
 # Signal generator — continuous carrier at 3.5 MHz on Si5351
 curl -X POST http://workbench.local:8080/api/siggen/start \
@@ -645,15 +637,6 @@ Auto-selecting RF source (Si5351 via I²C or GPCLK on GPIO 5/6) with optional PE
 | `atten_db` | 0–31.5 | Initial PE4302 attenuation |
 | `morse` | `{"message", "wpm?", "repeat?"}` | Key the carrier with Morse instead of continuous tone |
 
-**Legacy CW Beacon** (GPCLK-only, kept for backwards compatibility — use `/api/siggen/*` for new code):
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/cw/start` | `{"freq", "message", "wpm?", "pin?", "repeat?"}` |
-| POST | `/api/cw/stop` | Stop beacon |
-| GET | `/api/cw/status` | Current beacon state |
-| GET | `/api/cw/frequencies` | List achievable GPCLK frequencies `?low=&high=` |
-
 ---
 
 ### 10. Test Progress
@@ -702,7 +685,6 @@ pi/
   portal.py                  Main HTTP server, proxy supervisor, all API endpoints
   wifi_controller.py         WiFi AP/STA/scan/relay backend
   ble_controller.py          BLE scan/connect/write backend (bleak)
-  cw_beacon.py               CW beacon compatibility shim (delegates to signal_generator)
   signal_generator.py        Unified RF source: Si5351 (I2C) + optional PE4302, GPCLK fallback
   si5351.py                  Si5351A I2C clock generator driver
   pe4302.py                  PE4302 3-wire serial step attenuator driver

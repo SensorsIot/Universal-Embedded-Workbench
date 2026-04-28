@@ -107,7 +107,11 @@ Mode is switched via `POST /api/wifi/mode` or the web UI toggle.
 | workbench_driver.py | pytest/ | HTTP test driver for the WiFi instrument |
 | conftest.py | pytest/ | Pytest fixtures and CLI options |
 | test_instrument.py | pytest/ | WiFi workbench self-tests (WT-xxx) |
-| cw_beacon.py | /usr/local/bin/cw_beacon.py | CW beacon engine (GPCLK hardware clock + Morse keying) |
+| signal_generator.py | /usr/local/bin/signal_generator.py | Unified RF source — Si5351 + PE4302 attenuator, GPCLK fallback, Morse keyer |
+| si5351.py | /usr/local/bin/si5351.py | Si5351A I²C clock-generator driver |
+| pe4302.py | /usr/local/bin/pe4302.py | PE4302 3-wire serial step-attenuator driver |
+| gpclk.py | /usr/local/bin/gpclk.py | BCM2835/7 GPCLK hardware clock primitive |
+| morse.py | /usr/local/bin/morse.py | Backend-agnostic Morse keyer |
 | debug_controller.py | /usr/local/bin/debug_controller.py | GDB debug manager (OpenOCD lifecycle, probe allocation) |
 
 ### 1.6 State Model
@@ -809,11 +813,13 @@ serial-interface mode.
 | GET | /api/debug/status | Debug state for all slots (FR-024/025/026) |
 | GET | /api/debug/group | Slot groups and roles — dual-USB (FR-025) |
 | GET | /api/debug/probes | Available debug probes — ESP-Prog (FR-026) |
-| **CW Beacon** | | |
-| POST | /api/cw/start | Start Morse-keyed GPCLK carrier (FR-023) |
-| POST | /api/cw/stop | Stop CW beacon (FR-023) |
-| GET | /api/cw/status | Current beacon state (FR-023) |
-| GET | /api/cw/frequencies | List achievable GPCLK frequencies in a range (FR-023) |
+| **Signal Generator** | | |
+| POST | /api/siggen/start | Start RF carrier; optional Morse keying (FR-027) |
+| POST | /api/siggen/stop | Stop carrier (FR-027) |
+| POST | /api/siggen/freq | Retune active carrier (FR-027) |
+| POST | /api/siggen/atten | Set PE4302 attenuation (FR-027) |
+| GET | /api/siggen/status | Current state + hardware detection (FR-027) |
+| GET | /api/siggen/frequencies | List achievable frequencies in a range (FR-027) |
 | **Composite** | | |
 | GET | /api/log | Activity log (timestamped entries, filterable with `?since=`) |
 | POST | /api/enter-portal | Ensure device is connected to workbench AP — provision via captive portal if needed |
@@ -1419,122 +1425,6 @@ wt.ble_disconnect()
 - Scan results are ephemeral (not cached)
 - Only one BLE connection at a time (Raspberry Pi hardware limitation
   with single radio)
-
-### FR-023 — CW Beacon (GPCLK Morse Transmitter)
-
-Generate a Morse-keyed RF carrier on the Pi's GPIO using the BCM2835 hardware
-clock generator.  Designed for direction finder testing on the 80m amateur band
-(3.5–4.0 MHz).  No additional hardware required — a wire antenna on the GPIO
-pin is sufficient for short-range radiation.
-
-#### 23.1 Principle
-
-The BCM2835 has hardware clock generators (GPCLK) that produce square waves
-from PLLD (500 MHz) divided by an integer.  Morse keying switches the GPIO
-pin function between ALT0 (clock output) and INPUT (high-Z) — the oscillator
-runs continuously, giving clean on/off keying with no phase glitches.
-
-#### 23.2 Available Pins
-
-| GPIO | Physical Pin | Clock |
-|------|:------------:|-------|
-| 5 | 29 | GPCLK1 |
-| 6 | 31 | GPCLK2 |
-
-**Note:** GPIO 5 and 6 are shared with the gpiod-based GPIO control (FR-018).
-Do not use both CW beacon and `POST /api/gpio/set` on the same pin
-simultaneously.
-
-#### 23.3 Frequency Selection
-
-Frequencies are determined by integer division of PLLD (500 MHz).  Only
-discrete frequencies are achievable — no fractional divider is used, so the
-output is jitter-free but the frequency resolution is ~25–30 kHz in the 80m
-band.
-
-Representative 80m band frequencies:
-
-| Divider | Frequency (MHz) |
-|---------|-----------------|
-| 125 | 4.000 |
-| 130 | 3.846 |
-| 135 | 3.704 |
-| 139 | 3.597 |
-| 140 | 3.571 |
-| 142 | 3.521 |
-
-Use `GET /api/cw/frequencies?low=&high=` to list all achievable frequencies
-in any range.
-
-#### 23.4 Morse Timing
-
-PARIS standard: 50 dit-lengths per word.  Dit duration = 1.2 / WPM seconds.
-
-| Element | Duration |
-|---------|----------|
-| Dit | 1 unit |
-| Dah | 3 units |
-| Inter-element gap | 1 unit |
-| Inter-character gap | 3 units |
-| Inter-word gap | 7 units |
-
-WPM is configurable from 1 to 60.
-
-#### 23.5 Endpoints
-
-**`POST /api/cw/start`** — Start CW beacon
-
-Request body:
-```json
-{"pin": 5, "freq": 3571000, "message": "VVV DE TEST", "wpm": 12, "repeat": true}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| freq | int | Yes | — | Target frequency in Hz (snapped to nearest integer divider) |
-| message | string | Yes | — | Morse message text |
-| wpm | int/float | No | 15 | Words per minute (PARIS), 1–60 |
-| pin | int | No | 5 | GPIO pin (5 = GPCLK1, 6 = GPCLK2) |
-| repeat | bool | No | true | Loop message continuously |
-
-Response:
-```json
-{"ok": true, "pin": 5, "freq_hz": 3571428.57, "divider": 140, "message": "VVV DE TEST", "wpm": 12, "repeat": true}
-```
-
-`freq_hz` is the actual output frequency (may differ from requested `freq`
-due to integer divider snapping).
-
-**`POST /api/cw/stop`** — Stop CW beacon.  No body required.
-
-**`GET /api/cw/status`** — Current beacon state (active, pin, freq_hz,
-divider, message, wpm, repeat).
-
-**`GET /api/cw/frequencies?low=&high=`** — List all achievable integer-divider
-frequencies in a range.  Defaults to 3.5–4.0 MHz.
-
-#### 23.6 Implementation
-
-- **`cw_beacon.py`**: Standalone module imported by portal.py
-- **Register access**: `/dev/mem` mmap to GPIO and clock manager registers
-  (requires root — portal runs as root via systemd).  Peripheral base is
-  auto-detected from `/proc/device-tree/soc/ranges` (works on all Pi models:
-  BCM2835 = `0x20000000`, BCM2837/Pi Zero 2 W = `0x3F000000`)
-- **Keying method**: GPIO function select toggle (ALT0 ↔ INPUT) — clock
-  generator runs continuously, pin connects/disconnects
-- **Thread model**: Single daemon thread per beacon; starting a new beacon
-  stops the previous one
-- **Shutdown**: Clock generator stopped and pin released to INPUT on stop or
-  portal shutdown
-
-#### 23.7 Driver Methods
-
-```python
-wt.cw_start(freq=3_571_000, message="VVV DE TEST", wpm=12)
-wt.cw_status()     # {"active": True, "freq_hz": 3571428.57, ...}
-wt.cw_stop()
-wt.cw_frequencies(low=3_500_000, high=4_000_000)  # list of {divider, freq_hz}
-```
 
 ### FR-024 — GDB Debug: USB JTAG (ESP32-C3/S3 Single-Port)
 
@@ -2253,16 +2143,15 @@ changes.
 ### FR-027 — Signal Generator (RF Source + Step Attenuator)
 
 Unified RF-source service that emits a continuous carrier, optionally
-Morse-keyed, with programmable step attenuation. Supersedes the narrower
-CW-beacon API (FR-023) by adding an I2C clock-generator backend and a
-serial-controlled attenuator while preserving GPCLK as a fallback path.
+Morse-keyed, with programmable step attenuation. Two backends are
+auto-selected at runtime, with optional in-line attenuation control.
 
 #### 27.1 Backends
 
 | Backend | Hardware | Frequency range | Notes |
 |---------|----------|-----------------|-------|
-| `si5351` | Si5351A on I2C1 (GPIO 2 SDA, GPIO 3 SCL), 3 channels (`clk0..clk2`) | ~8 kHz – 160 MHz | Preferred; arbitrary frequency |
-| `gpclk` | BCM2835 GPCLK2 on GPIO 6 (alt GPCLK1 on GPIO 5) | Discrete PLLD/N only | Fallback; same substrate as FR-023 |
+| `si5351` | Si5351A on I2C1 (GPIO 2 SDA, GPIO 3 SCL), 3 channels (`clk0..clk2`) | ~8 kHz – 160 MHz | Preferred; precise fractional synthesis |
+| `gpclk` | BCM2835 GPCLK1 on GPIO 5 (alt GPCLK2 on GPIO 6) | Discrete PLLD/N only (~25–30 kHz steps in 80m band) | Fallback when Si5351 is absent |
 | `auto` | Prefers `si5351` if the chip ACKs on I2C; falls back to `gpclk` | — | Default |
 
 The Si5351 backend programs each active CLK output for the lowest supported
@@ -2274,6 +2163,17 @@ Because the portal imports `/usr/local/bin/si5351.py`, drive-current changes
 require deploying that file to the Pi and restarting `rfc2217-portal` before
 starting or retuning the Si5351 carrier.
 
+The GPCLK backend uses `/dev/mem` mmap of the BCM2835 clock manager
+(requires root — the portal runs as root via systemd) and switches GPIO
+function select between ALT0 (clock out) and INPUT (high-Z) for keying,
+so the oscillator runs continuously and on/off transitions are
+phase-glitch-free. The peripheral base is auto-detected from
+`/proc/device-tree/soc/ranges` (Pi Zero W, Zero 2 W, Pi 3, Pi 4).
+
+**Pin sharing:** GPCLK pins 5/6 are shared with the gpiod-based GPIO
+control (FR-018). Do not use both `siggen` and `POST /api/gpio/set` on
+the same pin simultaneously.
+
 #### 27.2 Attenuator
 
 PE4302 RF step attenuator, 3-wire serial mode (DATA = GPIO 13, CLK = GPIO
@@ -2281,36 +2181,76 @@ PE4302 RF step attenuator, 3-wire serial mode (DATA = GPIO 13, CLK = GPIO
 J4, open J5/J6/J7 to enable serial mode.
 
 **Pin conflict:** LE shares GPIO 6 with GPCLK2. When the `gpclk` backend
-is active the attenuator's LE line is unavailable; only the `si5351`
-backend can be combined with live attenuation control.
+is active on GPIO 6 the attenuator's LE line is unavailable; only the
+`si5351` backend (or `gpclk` on GPIO 5) can be combined with live
+attenuation control.
 
-#### 27.3 API
+#### 27.3 Morse Keying
 
-| Method | Endpoint | Body | Description |
-|--------|----------|------|-------------|
-| POST | /api/siggen/start | `{freq_hz, backend?, channel?, atten_db?, morse?}` | Start carrier; optional Morse keying |
+When `morse` is supplied to `/api/siggen/start`, the keyer gates the
+carrier using PARIS-standard Morse timing. Dit duration = 1.2 / WPM
+seconds.
+
+| Element | Duration |
+|---------|----------|
+| Dit | 1 unit |
+| Dah | 3 units |
+| Inter-element gap | 1 unit |
+| Inter-character gap | 3 units |
+| Inter-word gap | 7 units |
+
+WPM is configurable from 1 to 60. With `repeat: true` the message loops
+indefinitely until `/api/siggen/stop`.
+
+#### 27.4 API
+
+| Method | Endpoint | Body / Query | Description |
+|--------|----------|--------------|-------------|
+| POST | /api/siggen/start | `{freq_hz, backend?, channel?, pin?, atten_db?, morse?}` | Start carrier; optional Morse keying |
 | POST | /api/siggen/stop | — | Stop carrier |
+| POST | /api/siggen/freq | `{freq_hz, channel?}` | Retune active carrier without restarting the keyer |
 | POST | /api/siggen/atten | `{db}` | Set PE4302 attenuation (0–31.5 dB) |
+| GET | /api/siggen/status | — | Current state + hardware detection |
+| GET | /api/siggen/frequencies | `?low=&high=&backend=` | Achievable frequencies in a range |
 
-Parameters:
+Parameters for `start`:
 
-- `freq_hz` (int, required) — carrier frequency in Hz.
+- `freq_hz` (number, required) — carrier frequency in Hz. The Si5351 hits
+  this exactly; `gpclk` snaps to the nearest integer divider (the response
+  reports the actual `freq_hz`).
 - `backend` (string, optional) — `auto` (default) | `si5351` | `gpclk`.
-- `channel` (string, optional) — Si5351 output, `clk0` (default) | `clk1` | `clk2`.
+- `channel` (int, optional) — Si5351 output, 0 (default) | 1 | 2.
+- `pin` (int, optional) — GPCLK pin, 5 (default) | 6.
 - `atten_db` (float, optional) — initial PE4302 setting.
-- `morse` (object, optional) — `{text, wpm}`; if present, keys the carrier
-  using the same PARIS-standard timing as FR-023.
+- `morse` (object, optional) — `{message, wpm?, repeat?}`; without it the
+  carrier runs continuous.
 
-#### 27.4 Configuration
+Starting a new carrier replaces any active one (single-instance service).
+
+#### 27.5 Configuration
 
 `/etc/rfc2217/signalgen.json` (installed by `pi/install.sh` from
 `pi/config/signalgen.json`):
 
 ```json
 {
-  "si5351": {"i2c_bus": 1, "address": "0x60"},
-  "pe4302": {"gpio_le": 6, "gpio_clk": 12, "gpio_data": 13}
+  "si5351": {"bus": 1, "address": 96, "default_channel": 0},
+  "gpclk":  {"default_pin": 5},
+  "pe4302": {"enabled": true, "data_pin": 13, "clk_pin": 12, "le_pin": 6}
 }
+```
+
+#### 27.6 Driver Methods
+
+```python
+wt.siggen_start(freq_hz=3_500_000)                     # auto backend, continuous
+wt.siggen_start(freq_hz=3_571_000,
+                morse={"message": "VVV DE TEST", "wpm": 15, "repeat": True})
+wt.siggen_freq(freq_hz=7_100_000)                       # retune
+wt.siggen_atten(db=12.5)                                # PE4302
+wt.siggen_status()
+wt.siggen_frequencies(low=3_500_000, high=4_000_000, backend="gpclk")
+wt.siggen_stop()
 ```
 
 ---
@@ -2606,11 +2546,11 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | WT-1205 | BLE disconnect | BLE Proxy | Yes |
 | WT-1206 | BLE write when not connected | BLE Proxy | No |
 | WT-1207 | BLE double connect rejected | BLE Proxy | Yes |
-| WT-1300 | CW beacon start and status | CW Beacon | No |
-| WT-1301 | CW beacon stop | CW Beacon | No |
-| WT-1302 | CW beacon frequency list | CW Beacon | No |
-| WT-1303 | CW beacon invalid pin rejected | CW Beacon | No |
-| WT-1304 | CW beacon replaces previous | CW Beacon | No |
+| WT-1300 | Signal generator start and status | Signal Generator | No |
+| WT-1301 | Signal generator stop | Signal Generator | No |
+| WT-1302 | Signal generator frequency list (gpclk) | Signal Generator | No |
+| WT-1303 | Signal generator Morse keying | Signal Generator | No |
+| WT-1304 | Signal generator replaces previous | Signal Generator | No |
 | WT-1400 | Debug start (USB JTAG) | Debug: USB JTAG | Yes |
 | WT-1401 | Debug stop restores serial | Debug: USB JTAG | Yes |
 | WT-1402 | Debug status | Debug: USB JTAG | Yes |
@@ -2674,6 +2614,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 8.2 | 2026-03-28 | Claude | JTAG-based reset and recovery: `/api/serial/reset` auto-selects JTAG reset when debug session is active (no USB re-enumeration, no flapping risk). Flapping recovery via JTAG halt when available. Skills updated with JTAG reset documentation |
 | 8.0 | 2026-03-27 | Claude | Remote GDB debugging — three variants: FR-024 USB JTAG (C3/S3 single-port, OpenOCD via built-in USB-Serial/JTAG), FR-025 Dual-USB (S3 two-port, serial+JTAG+app USB simultaneously), FR-026 ESP-Prog (external FT2232H probe for all ESP32 variants including classic). New `Debugging` slot state, `debug_controller.py` module, 5 API endpoints, slot groups for dual-USB, probe allocation for ESP-Prog. WT-1400–1605 test cases (18 tests). TASK-130–155 |
 | 7.2 | 2026-03-27 | Claude | CW beacon (FR-023): Morse-keyed RF carrier via BCM2835 GPCLK hardware on GPIO 5/6 for direction finder testing; PLLD 500 MHz integer divider for jitter-free 80m band output; PARIS-standard Morse timing 1–60 WPM; cw_beacon.py module; 4 API endpoints; driver methods cw_start/stop/status/frequencies; WT-1300–1304 test cases |
+| 9.0 | 2026-04-27 | Claude | Signal generator cleanup: retired the legacy `/api/cw/*` API and `cw_beacon.py` shim. FR-023 (CW beacon, GPCLK-only) merged into FR-027 (Signal Generator). FR-027 now covers Morse keying, the `freq`, `status`, and `frequencies` endpoints, and the full PE4302 attenuator path. Driver `cw_*` methods removed; tests WT-1300–1304 retargeted at `siggen_*`. Skill `cw-beacon` replaced by `signal-generator`. |
 | 9.1 | 2026-04-28 | Codex | Si5351 output level handling documented: backend programs the lowest 2 mA CLK drive-current setting and leaves precise RF level control to the PE4302 attenuator. |
 
 ---
@@ -2991,12 +2932,13 @@ Add this to /etc/rfc2217/workbench.json:
 - [ ] TASK-116: Update install.sh to install bleak dependency
 - [ ] TASK-117: Implement WT-1200–1207 BLE proxy test cases
 
-**CW Beacon (v7.2):**
-- [x] TASK-120: Implement `cw_beacon.py` (GPCLK register access, Morse engine, thread model)
-- [x] TASK-121: Add CW beacon API endpoints to portal.py (`/api/cw/start`, `stop`, `status`, `frequencies`)
-- [x] TASK-122: Add `cw_start/stop/status/frequencies()` methods to driver
+**Signal Generator (v7.2 → v9.0):**
+- [x] TASK-120: Implement `signal_generator.py` (Si5351 + PE4302, GPCLK fallback, Morse keyer)
+- [x] TASK-121: Add `/api/siggen/{start,stop,freq,atten,status,frequencies}` endpoints to portal.py
+- [x] TASK-122: Add `siggen_*` methods to driver
 - [x] TASK-123: Deploy to Pi and verify API endpoints
-- [x] TASK-124: Implement WT-1300–1304 CW beacon test cases
+- [x] TASK-124: Implement WT-1300–1304 signal generator test cases
+- [x] TASK-125: Retire `/api/cw/*` and `cw_beacon.py` (v9.0 cleanup — superseded by `/api/siggen/*`)
 
 **Auto-Debug (v8.1):**
 - [x] TASK-160: Auto-start OpenOCD on hotplug add (in _bg_start)
@@ -3054,7 +2996,11 @@ Add this to /etc/rfc2217/workbench.json:
 | `workbench_driver.py` | HTTP driver for running WT-xxx tests against the instrument |
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
 | `workbench_test.py` | End-to-end workbench tests (WT-100 through WT-1805) |
-| `cw_beacon.py` | CW beacon engine — GPCLK hardware clock + Morse keying for DF testing |
+| `signal_generator.py` | Unified RF source — Si5351 + optional PE4302 attenuator, GPCLK fallback, Morse keyer |
+| `si5351.py` | Si5351A I²C clock-generator driver |
+| `pe4302.py` | PE4302 3-wire serial step-attenuator driver |
+| `gpclk.py` | BCM2835/7 GPCLK hardware clock primitive (GPIO 5/6) |
+| `morse.py` | Backend-agnostic Morse keyer used by `signal_generator` |
 | `debug_controller.py` | GDB debug manager — OpenOCD lifecycle, probe allocation, slot state coordination |
 
 ---

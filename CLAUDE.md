@@ -19,7 +19,6 @@ pi/
   install.sh                  # Pi installer
   config/signalgen.json       # Signal generator config (Si5351 I2C, PE4302 pins)
   udev/                       # udev rules for hotplug
-  cw_beacon.py                # CW beacon — compat shim over signal_generator (GPCLK backend)
   signal_generator.py         # Unified RF source: Si5351 (I2C) with GPCLK fallback + optional PE4302 attenuator
   si5351.py                   # Si5351A I2C clock generator driver
   pe4302.py                   # PE4302 3-wire serial step attenuator driver
@@ -35,7 +34,7 @@ docs/
   Embedded-Workbench-FSD.md  # Full functional specification
 container/                    # Alternate devcontainer config
 skills/esp32-test-harness/    # Claude Code skill
-skills/cw-beacon/             # CW beacon skill (GPCLK Morse for DF testing)
+skills/signal-generator/      # Signal generator skill (Si5351 + PE4302, GPCLK fallback, optional Morse keying)
 ```
 
 ## Commands
