@@ -44,10 +44,12 @@ CLK_INTEGER_MODE = 0x40
 CLK_SRC_PLLB = 0x20              # 0 = PLLA
 CLK_INVERT = 0x10
 CLK_SRC_MS = 0x0C                # MultiSynth as source
-CLK_DRIVE_8MA = 0x03
+CLK_DRIVE_2MA = 0x00             # lowest output drive-current setting
 
 
 class Si5351Error(Exception):
+    """Si5351 driver error."""
+
     pass
 
 
@@ -72,7 +74,7 @@ class Si5351:
             with smbus2.SMBus(bus) as b:
                 b.read_byte_data(address, REG_DEVICE_STATUS)
             return True
-        except (OSError, IOError):
+        except OSError:
             return False
 
     def init(self) -> None:
@@ -86,6 +88,7 @@ class Si5351:
         self._write(REG_XTAL_LOAD, 0xD2)
 
     def close(self) -> None:
+        """Disable outputs and close the I2C bus."""
         try:
             self._write(REG_OUTPUT_ENABLE, 0xFF)
             for ch in range(3):
@@ -144,8 +147,8 @@ class Si5351:
         # Reset the PLL so the new multiplier takes effect
         self._write(REG_PLL_RESET, 0x80 if pll_is_b else 0x20)
 
-        # CLK control: MS source, integer mode, 8 mA drive, PLLA/B select
-        ctrl = CLK_INTEGER_MODE | CLK_SRC_MS | CLK_DRIVE_8MA
+        # CLK control: MS source, integer mode, 2 mA drive, PLLA/B select
+        ctrl = CLK_INTEGER_MODE | CLK_SRC_MS | CLK_DRIVE_2MA
         if pll_is_b:
             ctrl |= CLK_SRC_PLLB
         self._write(REG_CLK_CONTROL_BASE + channel, ctrl)
@@ -166,6 +169,7 @@ class Si5351:
         self._write(REG_OUTPUT_ENABLE, cur)
 
     def frequency(self, channel: int) -> float:
+        """Return the last programmed frequency for a channel."""
         return self._ch_freqs.get(channel, 0.0)
 
     # ── I²C primitives ──────────────────────────────────────────────

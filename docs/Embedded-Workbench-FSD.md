@@ -2265,6 +2265,15 @@ serial-controlled attenuator while preserving GPCLK as a fallback path.
 | `gpclk` | BCM2835 GPCLK2 on GPIO 6 (alt GPCLK1 on GPIO 5) | Discrete PLLD/N only | Fallback; same substrate as FR-023 |
 | `auto` | Prefers `si5351` if the chip ACKs on I2C; falls back to `gpclk` | — | Default |
 
+The Si5351 backend programs each active CLK output for the lowest supported
+drive-current setting, 2 mA (`CLKx_IDRV[1:0] = 00`). This reduces the raw
+square-wave output level before any external attenuation. Higher drive-current
+settings (4 mA, 6 mA, 8 mA) are intentionally not exposed through the API;
+precise level control remains the PE4302 attenuator's responsibility.
+Because the portal imports `/usr/local/bin/si5351.py`, drive-current changes
+require deploying that file to the Pi and restarting `rfc2217-portal` before
+starting or retuning the Si5351 carrier.
+
 #### 27.2 Attenuator
 
 PE4302 RF step attenuator, 3-wire serial mode (DATA = GPIO 13, CLK = GPIO
@@ -2665,6 +2674,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 8.2 | 2026-03-28 | Claude | JTAG-based reset and recovery: `/api/serial/reset` auto-selects JTAG reset when debug session is active (no USB re-enumeration, no flapping risk). Flapping recovery via JTAG halt when available. Skills updated with JTAG reset documentation |
 | 8.0 | 2026-03-27 | Claude | Remote GDB debugging — three variants: FR-024 USB JTAG (C3/S3 single-port, OpenOCD via built-in USB-Serial/JTAG), FR-025 Dual-USB (S3 two-port, serial+JTAG+app USB simultaneously), FR-026 ESP-Prog (external FT2232H probe for all ESP32 variants including classic). New `Debugging` slot state, `debug_controller.py` module, 5 API endpoints, slot groups for dual-USB, probe allocation for ESP-Prog. WT-1400–1605 test cases (18 tests). TASK-130–155 |
 | 7.2 | 2026-03-27 | Claude | CW beacon (FR-023): Morse-keyed RF carrier via BCM2835 GPCLK hardware on GPIO 5/6 for direction finder testing; PLLD 500 MHz integer divider for jitter-free 80m band output; PARIS-standard Morse timing 1–60 WPM; cw_beacon.py module; 4 API endpoints; driver methods cw_start/stop/status/frequencies; WT-1300–1304 test cases |
+| 9.1 | 2026-04-28 | Codex | Si5351 output level handling documented: backend programs the lowest 2 mA CLK drive-current setting and leaves precise RF level control to the PE4302 attenuator. |
 
 ---
 
