@@ -72,6 +72,37 @@ Behavior:
 7. Write the updated file using the **Edit** tool (preferred) or **Write** tool
    (if changes are too extensive for surgical edits).
 
+### 2.3 Mode C — Grill (deep interview for thin inputs)
+
+Use when the rough description is too thin to infer architecture safely:
+fewer than ~3 sentences, no codebase to explore, or no clarity on
+protocol/platform/operator. The default behaviour for Mode A is to ask 1-3
+questions per round and infer aggressively; Mode C escalates that into a
+depth-first interview that resolves the design tree branch by branch.
+
+```
+/fsd-writer --grill
+<rough description text>
+```
+
+Behaviour:
+
+1. Identify the highest-impact unresolved decision (the one that gates the
+   most downstream choices — usually connectivity, platform, or operator).
+2. Ask **one question at a time**. Wait for the answer before asking the next.
+3. Every question must come with the skill's **recommended answer**, not
+   just a list of options. The user should be able to accept with one word.
+4. Resolve dependencies in order. Do not ask about a downstream choice
+   (e.g. OTA mechanism) until its prerequisite (connectivity) is fixed.
+5. If a question is answerable from the codebase, config files, or
+   `CLAUDE.md` — **explore, do not ask** (see Section 4.3).
+6. Stop grilling once the design tree is resolved enough to generate the
+   FSD without `(assumed)` markers on architecture-critical fields.
+7. Generate the FSD (Section 7) and write the file (Section 10).
+
+Mode C is for the initial interview only. Once the FSD exists, switch to
+Mode B (evolve) for incremental changes.
+
 ## 3. Tool Usage
 
 This skill uses the following Claude Code tools:
@@ -129,22 +160,56 @@ information is missing. "Critical" means it affects:
 ### 4.2 How to Ask
 
 Use the **AskUserQuestion** tool with:
-- 1-3 precise questions per round (never a wall of questions)
-- Multiple-choice options where possible (with sensible defaults)
-- Questions phrased to unblock the FSD, not to explore nice-to-haves
+- 1-3 precise questions per round in Mode A; **one question at a time** in Mode C.
+- **Every question must include the skill's recommended answer**, not just
+  a list of options. The user must be able to accept with one word.
+- Order questions by dependency. Do not ask about a decision whose
+  prerequisite is still open (e.g. don't ask about OTA mechanism before
+  connectivity is fixed).
+- Phrase questions to unblock the FSD, not to explore nice-to-haves.
 
-Example:
+Example (good — recommendation up front):
+
+```
+Q: How does the device connect?
+Recommended: WiFi — matches the dashboard requirement and existing infra.
+Other options: BLE, LoRa, Cellular, USB-only.
+```
+
+Example (bad — options without a pick):
+
+```
+Q: How does the device connect? WiFi / BLE / LoRa / Cellular / USB-only?
+```
+
+Multi-question rounds (Mode A only):
 
 ```
 Questions:
-1. "How does the device connect?" → Options: WiFi, BLE, LoRa, Cellular, USB only
-2. "Do you need OTA firmware updates?" → Options: Yes (WiFi), Yes (BLE DFU), No
-3. "Who is the primary operator?" → Options: End user, Installer/technician, Automated backend
+1. How does the device connect?
+   Recommended: WiFi. Other: BLE, LoRa, Cellular, USB-only.
+2. Do you need OTA firmware updates?
+   Recommended: Yes (WiFi). Other: Yes (BLE DFU), No.
+3. Who is the primary operator?
+   Recommended: Installer/technician. Other: End user, Automated backend.
 ```
 
-### 4.3 When to Infer Instead of Asking
+### 4.3 When to Explore or Infer Instead of Asking
 
-The skill may silently infer reasonable defaults when:
+**Explore before asking.** Before asking ANY question, check whether it is
+answerable from project artefacts:
+
+- Read config files: `sdkconfig.defaults`, `platformio.ini`, `package.json`,
+  `Cargo.toml`, `CMakeLists.txt`, `docker-compose.yml`.
+- Grep for protocol/framework usage in source (BLE, WiFi, MQTT, HTTP, OTA,
+  USB HID, NVS, watchdog — see the detection patterns in Section 14).
+- Read `README.md`, `CLAUDE.md`, and any existing FSD or design docs.
+
+If the answer is in the codebase, **explore — do not ask the user**. Asking
+a question whose answer is already in the repo wastes attention and
+signals that the skill did not gather context (Section 3.1).
+
+**Infer silently** only when:
 - The detail does not significantly change high-level architecture, AND
 - The cost of being wrong is low.
 
