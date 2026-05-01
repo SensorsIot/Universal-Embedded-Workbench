@@ -1594,6 +1594,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_serial_monitor()
         elif path == "/api/serial/recover":
             self._handle_serial_recover()
+        elif path == "/api/serial/erase":
+            self._handle_serial_erase()
         elif path == "/api/serial/release":
             self._handle_serial_release()
         elif path == "/api/enter-portal":
@@ -2247,6 +2249,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             log_activity(f"serial.release({slot_label}) — {result.get('error', 'failed')}", "error")
         self._send_json(result)
+
+    def _handle_serial_erase(self):
+        """POST /api/serial/erase {"slot": "SLOT1"} — erase flash via esptool."""
+        body = self._read_json() or {}
+        slot_label = body.get("slot")
+        if not slot_label:
+            self._send_json({"ok": False, "error": "missing 'slot' field"}, 400)
+            return
+        slot = _find_slot_by_label(slot_label)
+        if not slot:
+            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"})
+            return
+        devnode = slot.get("devnode")
+        if not devnode:
+            self._send_json({"ok": False, "error": f"no device on slot {slot_label}"})
+            return
+        log_activity(f"serial.erase({slot_label}) — starting", "step")
+        import subprocess
+        tcp_port = slot.get("tcp_port")
+        result = subprocess.run(
+            ["esptool", "--port", f"rfc2217://localhost:{tcp_port}?ign_set_control",
+             "--after", "no-reset", "erase-flash"],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            log_activity(f"serial.erase({slot_label}) — done", "ok")
+            self._send_json({"ok": True, "output": result.stdout})
+        else:
+            log_activity(f"serial.erase({slot_label}) — failed", "error")
+            self._send_json({"ok": False, "error": result.stderr})
 
     # -- activity log & enter-portal --
 
