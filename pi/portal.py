@@ -54,6 +54,7 @@ STATE_ABSENT     = "absent"
 STATE_IDLE       = "idle"
 STATE_RESETTING  = "resetting"
 STATE_MONITORING = "monitoring"
+STATE_WRITING    = "writing"
 STATE_FLAPPING      = "flapping"
 STATE_RECOVERING    = "recovering"
 STATE_DOWNLOAD_MODE = "download_mode"
@@ -1330,6 +1331,78 @@ def serial_monitor(slot: dict, pattern: str | None = None,
     }
 
 
+def serial_write(slot: dict, data: str, pattern: str | None = None,
+                 timeout: float = 0.0, max_lines: int = 100) -> dict:
+    """Send data to a slot's serial port via RFC2217 proxy and optionally monitor response."""
+    import serial as pyserial
+
+    label = slot["label"]
+    tcp_port = slot.get("tcp_port")
+
+    if not tcp_port:
+        return {"ok": False, "error": f"{label}: no tcp_port configured"}
+    if not slot.get("running"):
+        return {"ok": False, "error": f"{label}: proxy not running"}
+
+    rfc2217_url = f"rfc2217://127.0.0.1:{tcp_port}"
+    lines = []
+    matched_line = None
+    start_time = time.time()
+    if pattern and not timeout:
+        timeout = 10.0
+
+    slot["state"] = STATE_WRITING
+    try:
+        ser = pyserial.serial_for_url(rfc2217_url, do_not_open=True)
+        ser.baudrate = 115200
+        ser.timeout = 0.2
+        ser.dtr = False
+        ser.rts = False
+        ser.open()
+
+        # Write data
+        if isinstance(data, str):
+            ser.write(data.encode("utf-8"))
+        else:
+            ser.write(data)
+        ser.flush()
+
+        # Optional: Monitor response
+        if pattern or timeout :
+            while (time.time() - start_time) < timeout:
+                line = ser.readline()
+                if not line:
+                    continue
+                try:
+                    decoded = line.decode("utf-8", errors="replace").strip()
+                except:
+                    continue
+
+                if decoded:
+                    lines.append(decoded)
+                    if len(lines) > max_lines:
+                        lines.pop(0)
+
+                    if pattern and pattern in decoded:
+                        matched_line = decoded
+                        break
+
+        ser.close()
+    except Exception as e:
+        return {"ok": False, "error": f"Cannot connect/write to {rfc2217_url}: {e}"}
+    finally:
+        slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+
+
+    result = {"ok": True, "output": lines}
+    if pattern:
+        result.update({
+            "matched": matched_line is not None,
+            "line": matched_line,
+        })
+    return result
+
+
 # ---------------------------------------------------------------------------
 # USB Flap Recovery — unbind USB to stop storm, then recover via GPIO or backoff
 # ---------------------------------------------------------------------------
@@ -1667,6 +1740,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_serial_reset()
         elif path == "/api/serial/monitor":
             self._handle_serial_monitor()
+        elif path == "/api/serial/write":
+            self._handle_serial_write()
         elif path == "/api/serial/recover":
             self._handle_serial_recover()
         elif path == "/api/serial/release":
@@ -2261,6 +2336,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 log_activity(f"serial.monitor({slot_label}) — timeout, no match", "info")
         else:
             log_activity(f"serial.monitor({slot_label}) — {result.get('error', 'failed')}", "error")
+        self._send_json(result)
+
+    def _handle_serial_write(self):
+        body = self._read_json() or {}
+        slot_label = body.get("slot")
+        data = body.get("data")
+        pattern = body.get("pattern")
+        timeout = float(body.get("timeout", 0))
+        if not slot_label:
+            self._send_json({"ok": False, "error": "missing 'slot' field"}, 400)
+            return
+        if data is None:
+            self._send_json({"ok": False, "error": "missing 'data' field"}, 400)
+            return
+        slot = _find_slot_by_label(slot_label)
+        if not slot:
+            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"})
+            return
+        log_activity(f"serial.write({slot_label}, data={data!r}, pattern={pattern!r})", "step")
+        result = serial_write(slot, data, pattern=pattern, timeout=timeout)
+        if result["ok"]:
+            if pattern:
+                if result.get("matched"):
+                    log_activity(f"serial.write({slot_label}) — matched: {result['line']}", "ok")
+                else:
+                    log_activity(f"serial.write({slot_label}) — timeout, no match", "info")
+            else:
+                log_activity(f"serial.write({slot_label}) — done", "ok")
+        else:
+            log_activity(f"serial.write({slot_label}) — {result.get('error', 'failed')}", "error")
         self._send_json(result)
 
     def _handle_serial_output(self, qs):
@@ -3180,6 +3285,7 @@ _UI_HTML = """\
         .slot.running { border-color: #00d4ff; box-shadow: 0 0 20px rgba(0,212,255,0.2); }
         .slot.resetting { border-color: #e67e22; box-shadow: 0 0 20px rgba(230,126,34,0.2); }
         .slot.monitoring { border-color: #9b59b6; box-shadow: 0 0 20px rgba(155,89,182,0.2); }
+        .slot.writing { border-color: #9b59b6; box-shadow: 0 0 20px rgba(182,89,155,0.2); }
         .slot.flapping { border-color: #e74c3c; background: #1a0000; }
         .slot.recovering {
             border-color: #e67e22; background: #1a1000;
@@ -3205,6 +3311,7 @@ _UI_HTML = """\
         .status.running { background: #00d4ff; color: #1a1a2e; }
         .status.resetting { background: #e67e22; color: #fff; }
         .status.monitoring { background: #9b59b6; color: #fff; }
+        .status.writing { background: #b6599b; color: #fff; }
         .status.flapping { background: #e74c3c; color: #fff; }
         .status.recovering { background: #e67e22; color: #fff; }
         .status.download_mode { background: #2ecc71; color: #1a1a2e; }
@@ -3470,6 +3577,8 @@ function statusLabel(s) {
     const labels = {
         'recovering': 'RECOVERING',
         'download_mode': 'DOWNLOAD MODE',
+        'monitoring': 'MONITORING',
+        'writing': 'WRITING',
     };
     return labels[st] || st.toUpperCase();
 }
@@ -3549,7 +3658,7 @@ function renderSlots(slots) {
             </div>
             <div class="url-box ${s.running || st === 'idle' || st === 'download_mode' ? '' : 'empty'}"
                  onclick="${s.running || st === 'idle' ? "copyUrl('" + copyTarget + "',this)" : ''}">
-                ${s.running || st === 'idle' ? ipUrl || 'Proxy running' : (st === 'download_mode' ? 'In download mode — flash via RFC2217' : (s.present || st === 'resetting' || st === 'monitoring' ? 'Device present, proxy not running' : (st === 'recovering' ? 'USB unbound — recovering...' : 'No device connected')))}
+                ${s.running || st === 'idle' ? ipUrl || 'Proxy running' : (st === 'download_mode' ? 'In download mode — flash via RFC2217' : (s.present || st === 'resetting' || st === 'monitoring' || st === 'writing' ? 'Device present, proxy not running' : (st === 'recovering' ? 'USB unbound — recovering...' : 'No device connected')))}
             </div>
             ${s.last_error ? '<div class="error">Error: ' + s.last_error + '</div>' : ''}
             ${statusMsg}
@@ -3828,11 +3937,15 @@ async function siggenAtten(val) {
     } catch (e) { /* ignore */ }
 }
 
-async function refresh() {
+async function adaptiveRefresh() {
     await Promise.all([fetchDevices(), fetchLog(), fetchHuman(), fetchTestProgress(), fetchSiggen()]);
+    
+    // Check if a test session is active from the last fetch
+    const progData = await fetch('/api/test/progress').then(r => r.json());
+    const interval = (progData.active) ? 500 : 2500;
+    setTimeout(adaptiveRefresh, interval);
 }
-refresh();
-setInterval(refresh, 5000);
+adaptiveRefresh();
 </script>
 </body>
 </html>
