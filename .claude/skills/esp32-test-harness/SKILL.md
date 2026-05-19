@@ -5,7 +5,7 @@ description: Manipulate ESP32 DUT during automated tests using the Serial Portal
 
 # ESP32 Test Harness
 
-How to manipulate the ESP32-C3 DUT during automated tests using the Serial Portal (192.168.0.87) and WiFi Tester infrastructure.
+How to manipulate the ESP32-C3 DUT during automated tests using the Serial Portal (workbench.local) and WiFi Tester infrastructure.
 
 **Golden rule:** The Serial Portal and MQTT broker are always-on infrastructure. Tests NEVER start, stop, or restart them.
 
@@ -70,7 +70,7 @@ wt.test_end()
 
 | Component | Address | Role |
 |-----------|---------|------|
-| Serial Portal | 192.168.0.87:8080 | RFC2217 serial proxy, WiFi/Serial API |
+| Serial Portal | workbench.local:8080 | RFC2217 serial proxy, WiFi/Serial API |
 | DUT WiFi (test AP) | 192.168.4.x | DUT on WiFi Tester AP |
 | DUT WiFi (portal) | 192.168.4.1 | DUT in captive portal AP mode |
 | MQTT broker | 192.168.4.1:1883 | Mosquitto on Pi (via WiFi Tester AP) |
@@ -79,12 +79,12 @@ Slots are mapped to physical USB hub ports via prefix matching. The portal auto-
 
 ### MQTT Broker (mosquitto on Pi)
 
-The Pi at 192.168.0.87 runs a mosquitto MQTT broker. When the WiFi Tester AP is active, the broker is reachable by DUTs on the artificial network at **192.168.4.1:1883**.
+The Pi at workbench.local runs a mosquitto MQTT broker. When the WiFi Tester AP is active, the broker is reachable by DUTs on the artificial network at **192.168.4.1:1883**.
 
 | Property | Value |
 |----------|-------|
 | Host (from DUT on AP) | 192.168.4.1 |
-| Host (from home network) | 192.168.0.87 |
+| Host (from home network) | workbench.local |
 | Port | 1883 |
 | Username | admin |
 | Password | admin |
@@ -92,10 +92,10 @@ The Pi at 192.168.0.87 runs a mosquitto MQTT broker. When the WiFi Tester AP is 
 **Service management (from dev machine):**
 ```bash
 # Check status
-ssh pi@192.168.0.87 sudo systemctl status mosquitto
+ssh pi@workbench.local sudo systemctl status mosquitto
 
 # Restart
-ssh pi@192.168.0.87 sudo systemctl restart mosquitto
+ssh pi@workbench.local sudo systemctl restart mosquitto
 ```
 
 **Quick tests (from dev machine on home network, or any host that can reach the AP):**
@@ -131,7 +131,7 @@ import sys
 sys.path.insert(0, "/tmp/Universal-Embedded-Workbench/pytest")
 from workbench_driver import WorkbenchDriver
 
-wt = WorkbenchDriver("http://192.168.0.87:8080")
+wt = WorkbenchDriver("http://workbench.local:8080")
 ```
 
 Or from bash one-liners:
@@ -139,7 +139,7 @@ Or from bash one-liners:
 ```bash
 PYTHONPATH=/tmp/Universal-Embedded-Workbench/pytest python3 -c "
 from workbench_driver import WorkbenchDriver
-wt = WorkbenchDriver('http://192.168.0.87:8080')
+wt = WorkbenchDriver('http://workbench.local:8080')
 # ... operations ...
 "
 ```
@@ -151,7 +151,7 @@ wt = WorkbenchDriver('http://192.168.0.87:8080')
 devices = wt.get_devices()
 dut = next(s for s in devices if s["present"])
 SLOT = dut["label"]       # e.g. "SLOT1", "SLOT2", "SLOT3" (fixed labels)
-PORT = dut["url"]         # e.g. "rfc2217://192.168.0.87:4001" (auto-assigned port)
+PORT = dut["url"]         # e.g. "rfc2217://workbench.local:4001" (auto-assigned port)
 ```
 
 ### Driver Methods Reference
