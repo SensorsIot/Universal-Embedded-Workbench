@@ -12,13 +12,62 @@ Zero-config by design: on boot the portal walks the Pi's USB hub topology and pr
 
 ### Installation
 
+The workbench has two installable components:
+
+1. **Pi service** — runs on a Raspberry Pi, exposes the REST API and proxies serial, JTAG, WiFi, BLE, GPIO, and the signal generator. Install once per workbench.
+2. **Claude Code skills** — twelve project skills under `.claude/skills/` that teach Claude Code how to drive the workbench (PlatformIO/ESP-IDF lifecycle, test harness, signal generator, FSD writer, etc.). Install on every developer machine that uses Claude Code with the workbench.
+
+The Pi service and the skills are independent — you can install either alone. Pick the path that matches your setup:
+
+#### Full installation (Pi + skills)
+
+You're setting up a new workbench from scratch.
+
+**Step 1 — Pi service** (on the Raspberry Pi):
+
 ```bash
 git clone https://github.com/SensorsIot/Universal-Embedded-Workbench.git
 cd Universal-Embedded-Workbench/pi
 sudo bash install.sh
 ```
 
-That's it. The installer sets up all dependencies (pyserial, hostapd, dnsmasq, bleak, esptool, OpenOCD), copies scripts to `/usr/local/bin/`, creates data directories, and starts the portal as a systemd service.
+The installer sets up all dependencies (pyserial, hostapd, dnsmasq, bleak, esptool, OpenOCD), copies scripts to `/usr/local/bin/`, creates data directories, and starts the portal as a systemd service.
+
+**Step 2 — Skills** (on each dev machine that drives the workbench): follow *Skills-only installation* below.
+
+#### Skills-only installation
+
+For dev machines that drive an existing workbench, or that only want a subset of the skills (e.g. `fsd-writer`, `signal-generator`) without running a workbench at all.
+
+```bash
+git clone https://github.com/SensorsIot/Universal-Embedded-Workbench.git /tmp/uew
+mkdir -p .claude/skills
+cp -r /tmp/uew/.claude/skills/. .claude/skills/
+rm -rf /tmp/uew
+```
+
+`.claude/skills/` is project-scoped (loaded only for the current repo). Use `~/.claude/skills/` instead to install globally for all projects on the machine.
+
+This installs twelve skills:
+
+| Skill | Purpose |
+|-------|---------|
+| `esp-pio-handling` | PlatformIO build / upload / monitor lifecycle (auto-detects workbench or local USB) |
+| `esp-idf-handling` | ESP-IDF build / flash / monitor / OTA lifecycle (auto-detects workbench or local USB) |
+| `esp32-test-harness` | DUT manipulation during automated tests — reset, NVS erase, captive portal, provisioning |
+| `workbench-debug` | Remote GDB debugging (USB JTAG, dual-USB S3, ESP-Prog) |
+| `workbench-wifi` | WiFi AP/STA/scan/relay via the workbench radio |
+| `workbench-ble` | BLE scan/connect/write via the workbench radio |
+| `workbench-logging` | Serial monitor with pattern matching and UDP log queries |
+| `workbench-mqtt` | Mosquitto broker control and MQTT test traffic |
+| `workbench-test-handling` | Test progress tracking and human-interaction prompts on the web UI |
+| `workbench-integration` | One-shot integration of a project with the workbench (UDP logging, WiFi prov, OTA, BLE) |
+| `signal-generator` | Si5351 / GPCLK + PE4302 RF source — carrier, Morse, retune, attenuation |
+| `fsd-writer` | Functional Specification Document generator with reference templates |
+
+Most `workbench-*` skills assume the Pi is reachable at `workbench.local` (or the IP in `SERIAL_PI`). Override `SERIAL_PI` in your shell or devcontainer, or edit the URLs inside any skill that doesn't match your network.
+
+Claude Code loads skills at the start of a session — restart your Claude Code session after copying.
 
 ### Plug In and Go
 
