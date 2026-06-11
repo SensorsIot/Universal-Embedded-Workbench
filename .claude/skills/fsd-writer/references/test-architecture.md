@@ -198,7 +198,5 @@ by layer), columns = tiers, each cell = covered/total requirements at that
 requirement → tier) crossed with test linkage — so it cannot drift from the code.
 Mark L0 fast-tier cells as expected-empty.
 
-`fsd-writer` authors the architecture and the empty skeleton; the **test-writer**
-skill authors the cases that fill it (top-down failure modes + input slices,
-bottom-up gap check, tier assignment); the traceability tool populates status. Do
-not hand-maintain the filled matrix in the FSD.
+`fsd-writer` authors the architecture and the empty skeleton; the traceability
+tool populates status. Do not hand-maintain the filled matrix in the FSD.
