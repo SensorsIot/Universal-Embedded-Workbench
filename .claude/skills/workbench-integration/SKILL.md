@@ -27,31 +27,36 @@ troubleshooting).
 
 ## FSD Document Structure
 
-This skill operates on FSDs produced by the `fsd-writer` skill, which uses
-this canonical numbered structure:
+This skill operates on FSDs produced by the `fsd-writer` skill, which uses the
+**layer-grouped "Parts" scheme** (see `fsd-writer/references/canonical-fsd-structure.md`).
+Chapter *numbers* are dynamic, so **locate chapters by role/title, not by a fixed
+number**:
 
 ```
-# <Project Name> — Functional Specification Document (FSD)
-## 1. System Overview                    ← pre-existing (read-only)
-## 2. System Architecture                ← pre-existing (read-only)
-## 3. Implementation Phases              ← pre-existing (read-only)
-## 4. Functional Requirements            ← pre-existing (read-only)
-## 5. Risks, Assumptions & Dependencies  ← pre-existing (read-only)
-## 6. Interface Specifications           ← pre-existing (read-only)
-## 7. Operational Procedures             ← REPLACED by this skill with workbench-specific content
-## 8. Verification & Validation          ← REPLACED by this skill with workbench test cases
-## 9. Troubleshooting Guide              ← REPLACED by this skill with workbench diagnostics
-## 10. Appendix                          ← REPLACED by this skill with logging strategy + constants
+# <Project Name> — FSD
+## System Overview              ← front matter, read-only
+## System Architecture (§2.4 Component Layering) ← front matter, read-only
+## Implementation Phases        ← front matter, read-only
+## Risks, Assumptions & Dependencies ← front matter, read-only
+# Part A — Application Logic (L2)   ← one chapter per feature; read-only
+# Part B — Interfaces (L1)          ← one chapter per interface; read-only
+# Part C — Foundation / Transport (L0)
+# Part D — Cross-cutting Concerns
+# Part E — Operations & Verification
+##   Operational Procedures      ← REPLACED by this skill (workbench operations)
+##   Verification & Validation   ← REPLACED by this skill (workbench test cases)
+## Appendices                    ← workbench logging strategy + constants appended
 ```
 
-**Sections 1–6** are written by the `fsd-writer` skill and contain system
-overview, architecture, phases, requirements, risks, and interfaces. This skill
-reads them to extract features, phases, and constants but does not modify them.
+There is **no global Functional Requirements or Interface Specifications
+section** — requirements live in each component chapter, and each interface is
+its own L1 chapter under Part B. This skill **reads** the front matter and
+component chapters (to extract features, phases, interfaces, constants) without
+modifying them, and **replaces** the Operational Procedures and Verification &
+Validation chapters under Part E (and appends to Appendices).
 
-**Sections 7–10** are written (or replaced) by this skill with workbench-specific
-operational procedures, test cases, troubleshooting, and appendix content.
-
-Steps 1–7 handle firmware integration. Steps 8–12 write FSD sections 7–10.
+Steps 1–7 handle firmware integration. Steps 8–12 write the Operations / V&V /
+Appendix chapters.
 
 ## Template Reference
 
@@ -92,9 +97,10 @@ Find the project's FSD path and firmware root directory. Confirm:
 ### Step 2: Parse FSD — extract features and build checklist
 
 Read the entire FSD (produced by the `fsd-writer` skill). Extract features from
-**Section 4 (Functional Requirements)**, phases from **Section 3 (Implementation
-Phases)**, interfaces from **Section 6 (Interface Specifications)**, and
-architecture details from **Section 2 (System Architecture)**.
+the **component chapters** (each chapter states the FR/NFR it owns — there is no
+global requirements section), phases from the **Implementation Phases** chapter,
+interfaces from the **Part B (L1 Interfaces)** chapters, and architecture details
+from **System Architecture (§2.4 Component Layering)**.
 
 Build a feature checklist:
 
@@ -223,11 +229,11 @@ The exact implementation can vary, but the order must be: NVS → netif → UDP 
 
 ### Step 8: Write "7. Operational Procedures" (Workbench Operations)
 
-Replace `## 7. Operational Procedures` in the FSD with workbench-specific operational content covering: hardware setup, flashing, WiFi provisioning, BLE commands, OTA updates, HTTP endpoints, and log monitoring. This section becomes a standalone operations guide with no test cases.
+Replace the **Operational Procedures** chapter (under Part E) with workbench-specific operational content covering: hardware setup, flashing, WiFi provisioning, BLE commands, OTA updates, HTTP endpoints, and log monitoring. This chapter becomes a standalone operations guide with no test cases.
 
 ### Step 9: Write "8. Verification & Validation" (Testing)
 
-Replace `## 8. Verification & Validation` with workbench test cases. Write phase verification tables where every FSD feature appears in exactly one table, test procedures reference Section 7 (not duplicate), and every step has concrete success criteria.
+Replace the **Verification & Validation** chapter (under Part E) with workbench test cases. Write phase verification tables where every FSD feature appears in exactly one table, test procedures reference the Operational Procedures chapter (not duplicate), and every step has concrete success criteria.
 
 ### Step 10: Write "9. Troubleshooting Guide" and "10. Appendix"
 
@@ -265,7 +271,7 @@ After completing all steps, verify:
 - [ ] app_main.c follows the canonical init order
 - [ ] "Init complete" is the last log message in app_main()
 
-**Section 7 — Operational Procedures (Step 8):**
+**Operational Procedures chapter (Step 8):**
 - [ ] Hardware table documents all slots (including dual-USB if applicable)
 - [ ] All project-specific values are filled in (no `<placeholder>` the AI must guess)
 - [ ] WiFi provisioning includes all three values: `portal_ssid`, `ssid`, `password`
@@ -273,15 +279,15 @@ After completing all steps, verify:
 - [ ] BLE command reference table covers every opcode
 - [ ] OTA workflow covers upload + both trigger methods (BLE and HTTP)
 - [ ] HTTP endpoints documented with relay examples
-- [ ] Section 7 works as a standalone operations guide
+- [ ] The chapter works as a standalone operations guide
 
-**Section 8 — Verification & Validation (Step 9):**
+**Verification & Validation chapter (Step 9):**
 - [ ] Every FSD feature appears in a phase verification table
 - [ ] Every implementation phase has a verification table
-- [ ] Test procedures reference (not duplicate) Section 7
+- [ ] Test procedures reference (not duplicate) the Operational Procedures chapter
 - [ ] Every test step has concrete success criteria
 
-**Sections 9 & 10 — Troubleshooting & Appendix (Step 10):**
+**Troubleshooting & Appendix (Step 10):**
 - [ ] Logging strategy explains when to use serial monitor vs UDP logs
 - [ ] Troubleshooting covers likely failure modes
 

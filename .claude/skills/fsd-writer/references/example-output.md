@@ -1,7 +1,11 @@
 # Example FSD Output
 
 The following snippet demonstrates the expected tone, structure, and level of
-detail for a medium-complexity project:
+detail for a medium-complexity project, written in the **layer-grouped Parts
+scheme** (see `references/canonical-fsd-structure.md`). Note how each component is
+a self-contained chapter under a layer Part, requirements live inside the chapter
+they constrain, and traceability is a pointer to a generated matrix — not a
+hand-filled table.
 
 ```markdown
 # ESP32 BLE HID Keyboard — Functional Specification Document (FSD)
@@ -10,76 +14,143 @@ detail for a medium-complexity project:
 
 The ESP32-S3 BLE HID Keyboard System enables a smartphone app to transmit text
 commands via BLE to an ESP32-S3 microcontroller, which converts them into USB HID
-keyboard events for any connected host computer. The system eliminates the need
-for Bluetooth keyboard pairing on the host side and provides deterministic,
-low-latency input paths suitable for accessibility tools, automation, and
-assistive typing.
+keyboard events for any connected host computer. It eliminates Bluetooth keyboard
+pairing on the host side and provides deterministic, low-latency input suitable
+for accessibility tools, automation, and assistive typing.
 
-**Primary goals:**
-- Reliable BLE -> HID translation with sub-50 ms latency.
-- Support for multiple keyboard layouts (US, DE, FR at minimum).
-- OTA firmware updates via WiFi for field maintenance.
-- Robust provisioning, logging, and recovery mechanisms.
+**Goals:** reliable BLE→HID translation < 50 ms; layouts US/DE/FR; OTA over WiFi.
+**Non-goals:** not a general BLE-to-USB bridge; no media keys in Phase 1-2.
+**Users:** end users needing assistive input; installers who flash & provision.
 
-**Non-goals:**
-- The system does not act as a general-purpose BLE-to-USB bridge.
-- No audio or media key support in Phase 1-2.
+## 2. System Architecture
 
-**Users / stakeholders:**
-- End users who need assistive or automated keyboard input.
-- Developers/installers who flash and provision the device.
+### 2.1 Logical Architecture
+Smartphone app → (BLE NUS) → ESP32-S3 → (USB HID) → host computer. A WiFi path
+serves OTA and a `/status` endpoint.
 
-## 4. Functional Requirements
+### 2.2 Hardware / Platform Architecture
+ESP32-S3 (USB-OTG), powered from the host USB bus.
 
-### 4.1 Functional Requirements
+### 2.3 Software Architecture
+FreeRTOS tasks: BLE rx, HID tx, WiFi/OTA. Config + layout in NVS.
 
-#### Communication
-- **FR-1.1** [Must]: The device shall accept text input via BLE Nordic UART
-  Service (NUS) from a connected smartphone.
-- **FR-1.2** [Must]: The device shall convert received text into USB HID keyboard
-  reports and send them to the connected host within 50 ms.
-- **FR-1.3** [Should]: The device shall support keyboard layout selection via BLE
-  command.
+### 2.4 Component Layering
+(stacked layer diagram — application on top, foundation at the bottom)
+- **L2 Application logic:** Text→HID translation; layout selection.
+- **L1 Interfaces:** BLE NUS handler; USB HID report builder; HTTP status/OTA handler.
+- **L0 Foundation:** NimBLE stack; TinyUSB stack; WiFi; OTA partition/rollback; NVS.
 
-#### Update & Maintenance
-- **FR-2.1** [Must]: The device shall support OTA firmware updates triggered via
-  BLE command or HTTP endpoint.
-- **FR-2.2** [Should]: The device shall report its firmware version via HTTP
-  `/status` endpoint.
+## 3. Implementation Phases
+- **Phase 1 — Foundation:** BLE link up, USB HID enumerated. Exit: host sees a keyboard.
+- **Phase 2 — Core:** text→HID translation, layouts, OTA. Exit: end-to-end typing + OTA rollback.
 
-### 4.2 Non-Functional Requirements
-
-- **NFR-1.1** [Must]: BLE-to-HID latency shall not exceed 50 ms under normal
-  operating conditions.
-- **NFR-1.2** [Must]: The device shall recover from OTA failure by rolling back
-  to the previous firmware partition.
-
-## 5. Risks, Assumptions & Dependencies
+## 4. Risks, Assumptions & Dependencies
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| USB HID descriptor rejected by host OS | Medium | High | Test with macOS, Windows, Linux during Phase 2 |
-| BLE connection drops during text entry | Low | Medium | Implement reconnect logic with buffering |
+| HID descriptor rejected by host OS | Medium | High | Test macOS/Windows/Linux in Phase 2 |
+| BLE drop mid-entry | Low | Medium | Reconnect + buffering |
 
-**Assumptions:**
-- The host computer provides USB bus power (500 mA) (assumed).
-- iOS is the primary mobile platform; Android support is deferred (assumed).
+**Assumptions:** host provides 500 mA USB bus power (assumed); iOS primary, Android deferred (assumed).
+**Dependencies:** ESP-IDF v5.x TinyUSB; NimBLE.
 
-**Dependencies:**
-- ESP-IDF v5.x TinyUSB stack for HID support.
-- NimBLE stack for BLE.
+# Part A — Application Logic (L2)
 
-## 8. Verification & Validation
+## 5. Text → HID Translation
 
-### 8.4 Traceability Matrix
+**Purpose.** Convert a received UTF-8 text string into a sequence of USB HID
+keyboard reports for the active layout.
 
-| Requirement | Priority | Test Case(s)       | Status  |
-|------------|----------|--------------------|---------|
-| FR-1.1     | Must     | TC-2.1             | Covered |
-| FR-1.2     | Must     | TC-2.2, TC-2.3     | Covered |
-| FR-1.3     | Should   | TC-2.4             | Covered |
-| FR-2.1     | Must     | TC-1.5, TC-2.5     | Covered |
-| FR-2.2     | Should   | TC-2.6             | Covered |
-| NFR-1.1    | Must     | TC-2.3             | Covered |
-| NFR-1.2    | Must     | TC-2.7             | Covered |
+**Requirements.**
+- **FR-5.1** [Must]: The device shall convert received text into USB HID reports
+  and deliver them to the host within 50 ms of receipt.
+- **FR-5.2** [Should]: The device shall apply the active keyboard layout when
+  mapping characters to keycodes.
+- **NFR-5.1** [Must]: Per-character translation latency shall not exceed 50 ms
+  under normal operation.
+
+**Decision logic.** For each rune: look up (keycode, modifier) in the active
+layout table → emit key-down report → emit key-up report. Unmappable runes are
+dropped and counted (see §13 Logging).
+
+**Failure modes.** Empty/oversized string → ignored; layout table missing →
+fall back to US.
+
+## 6. Layout Selection
+
+**Purpose.** Select the active layout (US/DE/FR) and persist it.
+- **FR-6.1** [Should]: The device shall accept a layout-selection command over BLE
+  and persist the choice across reboot.
+
+# Part B — Interfaces (L1)
+
+## 7. BLE NUS Interface
+
+**Purpose & peer.** Receives text and commands from the smartphone app over the
+Nordic UART Service.
+- **FR-7.1** [Must]: The device shall accept text input via BLE NUS from a
+  connected smartphone.
+
+**Schema.** RX characteristic: UTF-8 bytes (text) or a `CMD:` prefixed control
+line (e.g. `CMD:LAYOUT=DE`). Direction: phone → device.
+**Failure modes.** Malformed `CMD:` → NAK log line, no state change.
+
+## 8. USB HID Interface
+
+**Purpose & peer.** Presents a standard boot-keyboard to the host; emits reports.
+- **FR-8.1** [Must]: The device shall enumerate as a USB HID boot keyboard.
+
+**Schema.** 8-byte boot report (modifier, reserved, 6 keycodes). Direction: device → host.
+
+## 9. HTTP Status & OTA Interface
+
+- **FR-9.1** [Must]: The device shall accept OTA firmware uploads over WiFi.
+- **FR-9.2** [Should]: The device shall report firmware version at `GET /status`.
+
+# Part C — Foundation / Transport (L0)
+
+## 10. WiFi / OTA Platform
+
+**Purpose.** ESP-IDF WiFi + OTA partition scheme; we configure and use it, we do
+not implement it. Tested **transitively** via §9.
+- **NFR-10.1** [Must]: The device shall roll back to the previous partition on a
+  failed OTA boot.
+
+## 11. BLE & USB Stacks
+
+NimBLE and TinyUSB — configured, not owned. Exercised transitively via §7/§8.
+
+# Part D — Cross-cutting Concerns
+
+## 12. Security
+- **NFR-12.1** [Should]: OTA images shall be signature-verified before activation.
+
+## 13. Logging / Observability
+Serial structured logs; dropped-rune and BLE-NAK counters.
+
+# Part E — Operations & Verification
+
+## 14. Operational Procedures
+Flash (§3 Phase 1) → pair app over BLE (§7) → type (§5) → update via OTA (§9/§10
+rollback on failure). Recovery: hold BOOT 5 s to clear NVS layout (§6).
+
+## 15. Verification & Validation
+
+### 15.0 Test Architecture
+Tiers: **host** (layout-table mapping, report builder — pure functions),
+**target** (BLE rx, USB enumeration, OTA), **bench** (real phone + real host).
+L0 (WiFi/BLE/USB stacks) tested transitively; L1 pure cores at host tier, wire/flow
+at target; L2 translation at host tier.
+
+### 15.1 Acceptance Tests
+End-to-end: type a paragraph in each layout on macOS/Windows/Linux; OTA + forced
+rollback.
+
+### 15.2 Traceability
+Generated — see `tests/coverage-matrix.md` (component × tier) and `tests/gaps.md`
+(uncovered requirements), produced by the traceability tool from the FR/NFR IDs in
+these chapters and the test specs. Not hand-maintained.
+
+## Appendix
+Constants: MAX_TEXT_LEN, report rate, OTA partition names, `/status` JSON shape.
 ```

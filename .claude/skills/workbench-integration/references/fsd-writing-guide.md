@@ -1,15 +1,19 @@
 # FSD Writing Guide (Steps 8-10)
 
-Detailed instructions for writing FSD Sections 7-10 with workbench-specific content.
+Detailed instructions for writing the Operations / Verification & Validation /
+Appendix chapters with workbench-specific content. The fsd-writer FSD uses the
+layer-grouped Parts scheme, so locate these by role/title (under Part E / back
+matter), not by a fixed section number.
 
-## Step 8: Write "7. Operational Procedures" (Workbench Operations)
+## Step 8: Write the Operational Procedures chapter (Workbench Operations)
 
-Replace `## 7. Operational Procedures` in the FSD with workbench-specific
-operational content. This section becomes a standalone **operations guide** -- how
-to interact with the device through the workbench. It contains no test cases.
+Replace the **Operational Procedures** chapter (under Part E) with
+workbench-specific operational content. This chapter becomes a standalone
+**operations guide** -- how to interact with the device through the workbench. It
+contains no test cases.
 
-If the fsd-writer left a generic Section 7, replace it entirely. The workbench
-operations are the operational procedures for this project.
+If the fsd-writer left a generic Operational Procedures chapter, replace it
+entirely. The workbench operations are the operational procedures for this project.
 
 ### 8a. Hardware setup
 
@@ -101,15 +105,16 @@ Document the device's HTTP endpoints and how to reach them via the workbench HTT
 
 Document the two log methods (serial monitor and UDP logs) with example commands. This is the "how" -- when to use which method goes in the Appendix.
 
-## Step 9: Write "8. Verification & Validation" (Testing)
+## Step 9: Write the Verification & Validation chapter (Testing)
 
-Replace `## 8. Verification & Validation` in the FSD with workbench test cases.
-This section contains **only test cases** -- verification tables with pass/fail
-criteria. It does not repeat operational procedures from Section 7.
+Replace the **Verification & Validation** chapter (under Part E) with workbench
+test cases. This chapter contains **only test cases** -- verification tables with
+pass/fail criteria. It does not repeat operational procedures from the
+Operational Procedures chapter.
 
-If the fsd-writer left a generic Section 8 with a traceability matrix, preserve
-the traceability matrix (Section 8.4) and replace the phase verification tables
-(Sections 8.1, 8.2, 8.3) with workbench-specific test procedures.
+Preserve the chapter's **§x.0 Test Architecture** and its **generated-traceability
+pointer** (the matrix/gap-report reference — never a hand-filled status table);
+replace the phase verification tables with workbench-specific test procedures.
 
 ### 9a. Phase verification tables
 
@@ -125,13 +130,13 @@ For each implementation phase, write a table:
 
 **Rules:**
 - Every FSD feature must appear in exactly one phase verification table
-- Test procedures **reference** operations from Section 7 (Operational Procedures) (e.g., "Provision WiFi (see WiFi Provisioning)") -- they don't duplicate curl commands
+- Test procedures **reference** operations from the Operational Procedures chapter (e.g., "Provision WiFi (see WiFi Provisioning)") -- they don't duplicate curl commands
 - Every step must have concrete, observable success criteria -- no vague "verify it works"
 - Include the hex data for BLE commands inline (e.g., "BLE write `024869`") since that's test-specific
 
-## Step 10: Write "9. Troubleshooting Guide" and "10. Appendix"
+## Step 10: Write the Troubleshooting and Appendix content
 
-Replace `## 9. Troubleshooting Guide` and `## 10. Appendix` in the FSD with
+Replace the **Troubleshooting** and **Appendices** content (back matter) with
 workbench-specific diagnostics and reference material.
 
 ### 10a. Logging strategy

@@ -1,12 +1,13 @@
 ---
 name: fsd-writer
 description: >
-  Generates or updates a Functional Specification Document (FSD), mainly
-  for ESP32 projects. Converts rough project descriptions into structured FSDs with
-  requirements, test cases, and traceability. Supports initial generation
-  and incremental evolution. Triggers on "FSD", "fsd", "write FSD",
-  "create FSD", "generate FSD", "new FSD", "update FSD", "evolve FSD",
-  "functional spec", "specification document".
+  Generates or updates a Functional Specification Document (FSD) for any kind of
+  system — embedded, cloud back-end, mobile, networking, SDR, or hybrid. Converts
+  rough project descriptions into structured FSDs with requirements, test cases,
+  and traceability. Supports initial generation and incremental evolution, and
+  loads optional domain packs (e.g. ESP32) for domain-specific detection and test
+  libraries. Triggers on "FSD", "fsd", "write FSD", "create FSD", "generate FSD",
+  "new FSD", "update FSD", "evolve FSD", "functional spec", "specification document".
 ---
 
 # FSD Writer Skill
@@ -68,7 +69,8 @@ Behavior:
 3. Ask clarifying questions only if the delta introduces architectural ambiguity.
 4. Apply changes surgically — preserve all unaffected sections verbatim.
 5. Regenerate only the sections affected by the delta.
-6. Maintain numbering, cross-references, and the traceability matrix automatically.
+6. Maintain numbering and cross-references; the traceability matrix is
+   **regenerated** by the traceability tool, never hand-edited in the FSD.
 7. Write the updated file using the **Edit** tool (preferred) or **Write** tool
    (if changes are too extensive for surgical edits).
 
@@ -137,8 +139,10 @@ When updating an existing FSD:
 - **Never regenerate the entire file.** Only touch sections affected by the delta.
 - Use the **Edit** tool with precise `old_string` / `new_string` pairs.
 - If a delta adds a new phase, insert it and renumber subsequent phases.
-- If a delta adds new FRs, assign the next available FR number in the correct group.
-- Always update the traceability matrix when FRs or tests change.
+- If a delta adds new requirements, assign the next available ID (FR/NFR or clause,
+  per the FSD's convention) in the owning component chapter.
+- The traceability matrix is generated — when FRs or tests change, ensure it is
+  regenerated; never hand-edit coverage status in the FSD.
 - If the delta invalidates existing content, remove or revise it — do not leave
   contradictions.
 
@@ -201,8 +205,9 @@ answerable from project artefacts:
 
 - Read config files: `sdkconfig.defaults`, `platformio.ini`, `package.json`,
   `Cargo.toml`, `CMakeLists.txt`, `docker-compose.yml`.
-- Grep for protocol/framework usage in source (BLE, WiFi, MQTT, HTTP, OTA,
-  USB HID, NVS, watchdog — see the detection patterns in Section 14).
+- Grep for protocol/framework usage in source (HTTP/REST, gRPC, WebSocket,
+  message queues, DB/auth SDKs, BLE/WiFi, etc.) and check whether a domain pack
+  matches (Section 14) for domain-specific detection patterns.
 - Read `README.md`, `CLAUDE.md`, and any existing FSD or design docs.
 
 If the answer is in the codebase, **explore — do not ask the user**. Asking
@@ -235,9 +240,9 @@ Given the rough description, the skill must extract or infer the following:
 ### 6.1 Project Name
 
 Derive a short, descriptive name:
-- "ESP32 BLE HID Keyboard"
-- "Solar-Aware EV Charging Controller"
-- "LoRa Mailbox Notifier"
+- "ESP32 BLE HID Keyboard" (embedded)
+- "Multi-Tenant Billing API" (cloud back-end)
+- "Offline-First Notes App" (mobile)
 
 ### 6.2 System Purpose & Goals
 
@@ -255,8 +260,16 @@ If components are implied but not explicit, infer and mark as assumptions.
 
 ### 6.4 Functional Requirements (FR)
 
-Convert each described behavior into FR-x.y items:
-- Group logically (Communication, Data Processing, User Interaction, Safety)
+Convert each described behavior into a stated requirement:
+- **State each requirement in the chapter of the component it constrains** — there
+  is no global Functional Requirements section in the Parts scheme (Section 7). A
+  requirement about the meter decoder lives in the meter-decoder interface chapter;
+  one about the control loop lives in that L2 feature chapter.
+- **Two conventions** (pick one per project; see
+  `references/canonical-fsd-structure.md`): `FR-x.y`/`NFR-x.y [Must/Should/May]`
+  (the lightweight default), or **stable clause IDs + generated traceability** (a
+  finer-grained, higher-assurance alternative for large FSDs — every assertion gets
+  a stable ID, tests cite it, code is `@fsd`-tagged, a tool generates the matrix).
 - Assign priority: **Must** / **Should** / **May**
 - Use "shall" language: "The system shall..."
 
@@ -281,11 +294,15 @@ Extract or infer key NFRs with priorities:
 
 ### 6.6 Interfaces & Data Models
 
-From the description and answers:
-- Identify protocols (BLE, WiFi, USB HID, HTTP, MQTT, LoRa, OCPP, etc.)
-- Describe endpoints, characteristics, topics, commands
+Each interface becomes its **own L1 chapter** (Part B) — there is no global
+Interface Specifications section in the Parts scheme. Per interface chapter:
+- Identify the protocol (BLE, WiFi, USB HID, HTTP, MQTT, LoRa, OCPP, etc.)
+- Describe endpoints, characteristics, topics, commands (commands/opcodes only
+  for custom protocols)
 - Define payload structures (fields, units, types)
 - Specify direction (client -> server, device -> cloud, etc.)
+- Keep the interface's requirements, schema, handlers, and failure modes together
+  in that chapter (see `references/canonical-fsd-structure.md`).
 
 ### 6.7 Phases
 
@@ -311,30 +328,93 @@ domain.
 
 From extracted requirements:
 - Create test cases that verify FRs and critical NFRs
-- Organize by phase and feature area
+- Organize test specs by component/interface, mirroring the body chapters
 - Use structured format: Objective, Preconditions, Steps, Expected Result
-- Build the traceability matrix (Section 8)
+- Reference the **generated** traceability matrix and gap report — do not
+  hand-fill coverage status (Section 8)
 
-## 7. Canonical FSD Structure
+### 6.10 Component Layering & Test Architecture
 
-All generated or updated FSDs must conform to the canonical structure (Sections 1-11: System Overview, Architecture, Phases, Requirements, Risks, Interfaces, Operational Procedures, V&V, Troubleshooting, Appendix, Related). Section 11 is recommended (not mandatory): a list of `[[wikilinks]]` to related FSDs/ADRs/runbooks for Obsidian-vault navigation. For the full template with all subsections and section inclusion rules, read `references/canonical-fsd-structure.md`.
+Give every FSD a layered component architecture (§2.4) that the test strategy
+falls out of (§x.0 Test Architecture, in the V&V chapter under Part E):
 
-## 8. Traceability Matrix (Mandatory)
+- Classify each component into a layer with a strict one-way dependency —
+  **L0 Foundation/platform → L1 Interfaces → L2 Application logic**. The L0-vs-L1
+  line is **ownership** ("did we implement and test the protocol?"): a
+  library/managed client to an external service is foundation; a hand-written
+  decoder/driver/handler is an interface. Three layers is the common default, but
+  the model is **open-ended (L0..Ln)** — add layers when a complex system genuinely
+  has more distinct, one-way-dependent tiers (e.g. orchestration over domain logic,
+  or a shared-services layer). Each layer becomes its own body Part.
+- Draw a layered component diagram in §2.4 (stacked layer boxes, components on one
+  row per layer).
+- **The FSD body mirrors these layers**: each component becomes a self-contained
+  chapter, grouped under layer **Part** dividers (L2 → L1 → L0 → cross-cutting →
+  operations & verification). The §2.4 layering is the spine; the body Parts are
+  its projection. See `references/canonical-fsd-structure.md` (the Parts scheme).
+- **Advise the source layout in §2.4** so the *code* mirrors the layers too: one
+  module per component (never fold an interface into its consumer), lower layers
+  never depend on higher ones (invert via the composition root), pure cores
+  extracted for the fast tier. The FSD advises how to code, not just what to
+  build — see `references/test-architecture.md` ("Source layout mirrors the
+  layers").
+- In §x.0 Test Architecture, define the test tiers (cost-ordered execution
+  environments, named per platform), map them to the layers, and reference a
+  **generated** component × tier coverage matrix. This skill declares the
+  structure; a traceability tool fills in status.
 
-Every FSD must contain a traceability matrix in Section 8.4.
+Platform-independent — contents differ for embedded / cloud / mobile. For the
+profiles, the diagram convention (and the Mermaid layout gotcha), and the matrix,
+read `references/test-architecture.md`.
+
+## 7. Canonical FSD Structure (Layer-grouped "Parts" scheme)
+
+FSDs are organized **by architectural layer**, not by document-section type. After
+the front matter (§1 Overview, §2 Architecture incl. §2.4 Component Layering, §3
+Phases, §4 Risks), the body is grouped under unnumbered **Part** dividers that
+mirror the §2.4 layers — **Part A** Application logic (L2), **Part B** Interfaces
+(L1), **Part C** Foundation/transport (L0), **Part D** Cross-cutting concerns,
+**Part E** Operations & Verification — followed by Appendices and an optional
+Related (`[[wikilinks]]`) section.
+
+Each interface, feature, and concern is its **own self-contained chapter**
+(requirements + interface + behavior + failure modes together); chapters are
+numbered flat across the whole document; depth is capped at four heading levels
+(`####`). There is **no global Functional Requirements or Interface
+Specifications section** — those dissolve into the component chapters.
+
+For Low-complexity projects the Part dividers may be dropped (list the few
+chapters directly, still in layer order). For the full skeleton, the
+chapter-internal structure, section-inclusion rules, complexity scaling, and the
+migration map from the older flat layout, read
+`references/canonical-fsd-structure.md`.
+
+## 8. Traceability (Mandatory, generated)
+
+Every FSD must carry traceability — but as a **pointer to generated artifacts**,
+never a hand-filled status table.
 
 Rules:
-- Every FR and NFR with priority **Must** or **Should** must appear in >= 1 test.
-- Every test case must reference the FR(s) / NFR(s) it validates.
-- Requirements with no test coverage must be flagged as `GAP`.
-- **May**-priority requirements may have test coverage but it is not mandatory.
-- When updating an FSD (evolve mode), the matrix must be regenerated to reflect
-  any added, removed, or changed requirements and tests.
+- Every **Must**/**Should** requirement — whether an `FR`/`NFR` item or a stable
+  **clause** (§6.4 conventions) — must be stated with a stable ID in its component
+  chapter and referenced by >= 1 test in the specs.
+- Every test case must reference the FR(s) / NFR(s) / clause(s) it validates.
+- The traceability tool computes coverage and emits the **coverage matrix**
+  (component × tier) and a **gap report** (requirements with no test). `GAP` is
+  *computed*, not typed into the FSD.
+- **May**-priority requirements may have coverage but it is not mandatory.
+- The FSD's V&V chapter (§x.2 Traceability) references the matrix/gap-report paths;
+  it must **not** hand-maintain a "Status: Covered / GAP" column — that drifts from
+  the code the moment a test changes (see `references/test-architecture.md` §4).
+- In evolve mode, adding/removing/changing a requirement or test just means the
+  generated matrix is re-run; no manual matrix edits.
 
 ## 9. Formatting & Style Rules
 
 - Output pure Markdown — no HTML tags.
-- Use heading levels exactly as defined in Section 7.
+- Heading levels: Part dividers are `#` (unnumbered); chapters are `##` (numbered
+  flat across the document); sub-sections `###`/`####`. **Cap depth at `####`** —
+  four levels. Keep chapter numbering sequential with no gaps across all Parts.
 - Use bullet lists for requirements; tables for tests, interfaces, and diagnostics.
 - Use concise, unambiguous engineering language.
 - Use **"shall"** for requirements ("The system shall...").
@@ -358,8 +438,8 @@ Create the `Documents/` directory if it does not exist.
 
 Examples:
 - `Documents/esp32-ble-hid-keyboard-fsd.md`
-- `Documents/solar-ev-charging-controller-fsd.md`
-- `Documents/lora-mailbox-notifier-fsd.md`
+- `Documents/multi-tenant-billing-api-fsd.md`
+- `Documents/offline-first-notes-app-fsd.md`
 
 ### 10.2 Explicit Path
 
@@ -376,62 +456,61 @@ For a complete example FSD snippet (medium-complexity BLE HID Keyboard project) 
 
 ## 12. Evolve Mode -- Detailed Behavior
 
-When updating an existing FSD, follow strict rules for what to preserve, update, add, and remove. Key principles: never renumber existing IDs, always update the traceability matrix, flag contradictions before overwriting. For the complete evolve mode rules (preserve/update/add/remove/conflict resolution), read `references/evolve-mode.md`.
+When updating an existing FSD, follow strict rules for what to preserve, update, add, and remove. Key principles: never renumber existing IDs, keep the traceability matrix generated (never hand-edited), flag contradictions before overwriting. For the complete evolve mode rules (preserve/update/add/remove/conflict resolution), read `references/evolve-mode.md`.
 
 ## 13. Quality Checklist
 
 After generating or updating an FSD, the skill must verify:
 
-- [ ] Every **Must** and **Should** FR/NFR appears in the traceability matrix.
-- [ ] Every traceability row with no test is marked `GAP`.
+- [ ] The body is grouped by layer Parts (or chapters in layer order for Low
+      complexity), mirroring §2.4; chapters are self-contained.
+- [ ] §2.4 states the source-layout convention (one module per component; lower
+      layers don't depend on higher ones; pure cores extracted) so the code can
+      mirror the layers.
+- [ ] Every **Must**/**Should** requirement (FR/NFR item or stable clause) is
+      stated with a stable ID in its component chapter and referenced by >= 1 test.
+- [ ] V&V traceability is a **pointer to the generated matrix/gap report** — no
+      hand-filled "Status: Covered / GAP" column in the FSD.
 - [ ] No `<placeholder>` or `TODO` text remains (flag to user if unresolvable).
-- [ ] Section numbering is sequential with no gaps.
+- [ ] Chapter numbering is sequential with no gaps across all Parts; heading depth
+      does not exceed `####`.
 - [ ] All phases have scope, deliverables, and exit criteria.
+- [ ] §2.4 Component Layering (with a layered diagram) and §x.0 Test Architecture
+      are present.
 - [ ] The file has been written to the correct path.
-- [ ] (Evolve mode) Unaffected sections are identical to the original.
+- [ ] (Evolve mode) Unaffected chapters are identical to the original.
 
 Report any checklist failures to the user before finalizing.
 
-## 14. Standard Test Libraries
+## 14. Domain Packs
 
-Include standard test cases in the FSD based on detected project features.
-Tests are conditionally included — scan the FSD and source code for detection
-patterns, then pull in the matching test specs from `references/`.
+The skill core is **domain-neutral**. Some domains have recurring components,
+detection signals, layer profiles, and standard test libraries; these live in
+**domain packs** under `references/domains/<domain>.md` and are loaded only when
+the project matches that domain — keeping the core applicable to any system.
 
-### Feature Detection
+### Selecting a pack
 
-| Feature | Detection Patterns | Test Spec | Include |
-|---------|-------------------|-----------|---------|
-| **WiFi STA** | `WiFi.begin`, `esp_wifi_connect`, "STA mode" | `wifi-test-spec.md` | WIFI-001–005, EC-100–101, EC-110–111, EC-115 |
-| **Captive Portal** | `WiFi.softAP`, "captive portal", "AP mode" | `captive-portal-test-spec.md` | AP-001–006, CP-001–006, TC-CP-100–102 |
-| **MQTT** | `PubSubClient`, `esp_mqtt`, "MQTT broker" | `mqtt-test-spec.md` | MQTT-001–031, TC-MQTT-100–103 |
-| **BLE** | `NimBLE`, `esp_ble`, `BLEDevice`, "BLE", "GATT" | `ble-test-spec.md` | BLE-001–032, TC-BLE-100–103 |
-| **BLE NUS** | `NUS`, `6E400001`, "Nordic UART" | `ble-test-spec.md` | BLE-020–023, TC-BLE-101 |
-| **OTA** | `esp_ota`, `httpUpdate`, "firmware update", "OTA" | `ota-test-spec.md` | OTA-001–013, TC-OTA-100–102 |
-| **USB HID** | `tinyusb`, `tusb_`, "HID", "keyboard", "USB device" | `usb-hid-test-spec.md` | HID-001–022, TC-HID-100–103 |
-| **NVS** | `Preferences`, `nvs_`, "NVS", "stored credentials" | `nvs-test-spec.md` | NVS-001–024, TC-NVS-100–103 |
-| **Watchdog** | `esp_task_wdt`, `TWDT`, "watchdog" | `watchdog-test-spec.md` | WDT-001–022, TC-WDT-100–102 |
-| **Logging** | `ESP_LOG`, `udp_log`, "UDP logging", "serial log" | `logging-test-spec.md` | LOG-001–026, TC-LOG-100–103 |
-| **Ethernet** | `W5500`, `ETH.begin`, "dual network" | `wifi-test-spec.md` | TEST-001–005, EC-100 |
+1. Detect the domain from the description, the codebase, and config files (each
+   pack lists its own detection signals).
+2. If a pack matches, **read `references/domains/<domain>.md`** and apply it:
+   its **layer profile** (concrete L0/L1/L2 contents for §2.4 — which becomes the
+   body's Part/chapter spine), its **tier names** (for the §x.0 Test Architecture),
+   and its **standard test libraries** (feature detection → test specs to fold into
+   the V&V specs and the generated traceability matrix).
+3. If no pack matches, use the platform-independent core only — the architecture
+   layering and test tiers from `references/test-architecture.md` still apply; pick
+   tier names that fit the platform (e.g. cloud: unit / integration / staging).
 
-### Workflow
+### Available packs
 
-1. Scan the FSD requirements and source code for detection patterns above
-2. For each detected feature, read the corresponding `references/*.md` file
-3. Copy relevant requirements, functional tests, and edge cases into the FSD
-4. Update project-specific placeholders (SSIDs, IPs, timeouts, etc.)
-5. Add all included tests to the traceability matrix (Section 8.4)
+| Pack | Domain | File |
+|------|--------|------|
+| `esp32` | ESP32 firmware (ESP-IDF / Arduino-ESP32): WiFi, BLE, MQTT, OTA, NVS, captive portal, watchdog, logging | `references/domains/esp32.md` |
 
-### Test Spec References
+### Adding a pack
 
-| File | Coverage |
-|------|----------|
-| [references/wifi-test-spec.md](references/wifi-test-spec.md) | WiFi STA connection, signal, DHCP, ethernet test mode |
-| [references/captive-portal-test-spec.md](references/captive-portal-test-spec.md) | AP mode, captive portal, provisioning, credential change |
-| [references/mqtt-test-spec.md](references/mqtt-test-spec.md) | Broker connection, pub/sub, QoS, LWT, reconnect, buffering |
-| [references/ble-test-spec.md](references/ble-test-spec.md) | BLE advertising, GATT, NUS, pairing, coexistence |
-| [references/ota-test-spec.md](references/ota-test-spec.md) | OTA download, rollback, integrity, power loss recovery |
-| [references/usb-hid-test-spec.md](references/usb-hid-test-spec.md) | USB enumeration, keyboard layouts, latency, stuck key prevention |
-| [references/nvs-test-spec.md](references/nvs-test-spec.md) | Config persistence, factory reset, corruption recovery, credentials |
-| [references/watchdog-test-spec.md](references/watchdog-test-spec.md) | Software/hardware WDT, memory watchdog, false trigger prevention |
-| [references/logging-test-spec.md](references/logging-test-spec.md) | Serial logging, UDP logging, log levels, crash capture |
+Create `references/domains/<domain>.md` following the same shape: **detection
+signals · layer profile (§2.4) · tier names (§x.0 Test Architecture) · standard test libraries**
+(a feature-detection table pointing to spec files under
+`references/domains/<domain>/`). Then add a row to the table above.
