@@ -309,6 +309,18 @@ class WorkbenchDriver:
         )
         return {k: v for k, v in result.items() if k != "ok"}
 
+    def serial_write(self, slot: str = "SLOT2", data: str = "",
+                     pattern: Optional[str] = None,
+                     timeout: float = 10.0) -> dict:
+        """POST /api/serial/write — write data and optionally monitor response."""
+        body: dict = {"slot": slot, "data": data, "timeout": timeout}
+        if pattern is not None:
+            body["pattern"] = pattern
+        result = self._api_post(
+            "/api/serial/write", body, timeout=timeout + 5
+        )
+        return {k: v for k, v in result.items() if k != "ok"}
+
     def enter_portal(self, slot: str = "SLOT2",
                      resets: int = 3) -> dict:
         """POST /api/enter-portal — starts background portal trigger."""
