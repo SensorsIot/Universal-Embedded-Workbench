@@ -2631,8 +2631,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         file_data = None
         file_name = None
         for part in parts_raw:
-            part = part.strip()
-            if not part or part == b"--":
+            # strip only the leading CRLF framing; do NOT .strip() the part,
+            # which silently drops trailing whitespace bytes (09 0a 0b 0c 0d 20)
+            # from binary uploads -> truncated image -> bad SHA-256 -> bricked flash
+            if part.startswith(b"\r\n"):
+                part = part[2:]
+            elif part.startswith(b"\n"):
+                part = part[1:]
+            if not part or part in (b"--", b"--\r\n", b"--\n"):
                 continue
             if b"\r\n\r\n" in part:
                 header_section, content = part.split(b"\r\n\r\n", 1)
@@ -2712,8 +2718,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         flash_args_text: str | None = None
 
         for part in parts_raw:
-            part = part.strip()
-            if not part or part == b"--":
+            # strip only the leading CRLF framing; do NOT .strip() the part,
+            # which silently drops trailing whitespace bytes (09 0a 0b 0c 0d 20)
+            # from binary uploads -> truncated image -> bad SHA-256 -> bricked flash
+            if part.startswith(b"\r\n"):
+                part = part[2:]
+            elif part.startswith(b"\n"):
+                part = part[1:]
+            if not part or part in (b"--", b"--\r\n", b"--\n"):
                 continue
             if b"\r\n\r\n" in part:
                 header_section, content = part.split(b"\r\n\r\n", 1)
