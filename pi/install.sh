@@ -90,7 +90,6 @@ cp "$SCRIPT_DIR/portal.py"                  /usr/local/bin/rfc2217-portal
 cp "$SCRIPT_DIR/plain_rfc2217_server.py"    /usr/local/bin/plain_rfc2217_server.py
 cp "$SCRIPT_DIR/wifi_controller.py"         /usr/local/bin/wifi_controller.py
 cp "$SCRIPT_DIR/ble_controller.py"          /usr/local/bin/ble_controller.py
-cp "$SCRIPT_DIR/cw_beacon.py"              /usr/local/bin/cw_beacon.py
 cp "$SCRIPT_DIR/bcm_gpio.py"                /usr/local/bin/bcm_gpio.py
 cp "$SCRIPT_DIR/gpclk.py"                   /usr/local/bin/gpclk.py
 cp "$SCRIPT_DIR/morse.py"                   /usr/local/bin/morse.py
