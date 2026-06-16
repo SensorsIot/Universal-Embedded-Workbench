@@ -1733,6 +1733,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/udplog":
             _udp_log.clear()
             self._send_json({"ok": True})
+        elif path == "/api/log":
+            # The dashboard "Clear" button only emptied the browser DOM; the next
+            # poll re-fetched the retained entries so the activity log reappeared.
+            # Clear the server-side log so the Clear actually sticks.
+            activity_log.clear()
+            self._send_json({"ok": True})
         elif path == "/api/firmware/delete":
             self._handle_firmware_delete()
         else:
@@ -3616,7 +3622,10 @@ async function enterPortal() {
     setTimeout(() => { btn.disabled = false; btn.textContent = 'Enter Captive Portal'; }, 30000);
 }
 
-function clearLog() {
+async function clearLog() {
+    // Clear the server-side log first, else the next poll re-fetches the retained
+    // entries (resetting lastLogTs alone pulls the whole log back).
+    try { await fetch('/api/log', { method: 'DELETE' }); } catch (e) { /* ignore */ }
     document.getElementById('log-entries').innerHTML = '';
     lastLogTs = '';
 }
