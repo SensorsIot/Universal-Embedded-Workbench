@@ -104,6 +104,39 @@ pio run -t upload --upload-port 'rfc2217://workbench.local:4001?ign_set_control'
 pio device monitor --port 'rfc2217://workbench.local:4001?ign_set_control'
 ```
 
+## Step 3c: Upload — Classic ESP32 behind a USB-serial bridge (local flash)
+
+If `pio run -t upload` over RFC2217 fails with **`Wrong boot mode detected (0x13)`**,
+the board is a classic ESP32 behind a USB-serial bridge (CP2102 / CH340 / CH9102):
+its external DTR/RTS auto-reset can't be driven reliably through the RFC2217 proxy.
+(Native-USB C3/S3/C6/H2 chips strap internally and flash fine over RFC2217 — this does
+not apply to them.)
+
+Flash locally on the Pi via `POST /api/flash`, which runs esptool on the workbench
+against the local devnode (stops the proxy, flashes, restarts it). Use the helper:
+
+```bash
+pio run                                   # build first
+python3 <skill>/workbench-flash.py \
+  --host workbench.local:8080 --slot SLOT3 --chip esp32
+```
+
+It gathers `bootloader.bin`, `partitions.bin`, `boot_app0.bin`, and `firmware.bin`
+from `.pio/build/<env>/` and POSTs them as multipart (part name = hex offset). Or call
+the endpoint directly:
+
+```bash
+curl -X POST http://workbench.local:8080/api/flash \
+  -F slot=SLOT3 -F chip=esp32 -F baud=460800 \
+  -F '0x1000=@.pio/build/<env>/bootloader.bin' \
+  -F '0x8000=@.pio/build/<env>/partitions.bin' \
+  -F '0xe000=@<framework>/tools/partitions/boot_app0.bin' \
+  -F '0x10000=@.pio/build/<env>/firmware.bin'
+```
+
+Response: `{"ok": bool, "returncode": int, "log": "..."}`. No `/api/serial/reset` needed
+— esptool hard-resets into the new firmware. Refused if a debug session is active.
+
 ## Step 4: Monitor
 
 ```bash
@@ -141,3 +174,4 @@ If upload fails, put ESP32 in bootloader mode:
 | Connection refused | Check portal at `http://workbench.local:8080`; verify device state is `idle` |
 | Timeout during flash | Use `--no-stub` flag; check network |
 | Port busy | Close other terminal/tool using the same RFC2217 port |
+| `Wrong boot mode detected (0x13)` | Classic ESP32 behind a USB-serial bridge — RFC2217 auto-reset can't enter the bootloader. Flash locally via `POST /api/flash` (see Step 3c / `workbench-flash.py`). |

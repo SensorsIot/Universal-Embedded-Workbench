@@ -531,6 +531,51 @@ curl -X POST http://workbench.local:8080/api/serial/reset \
 **Note:** A harmless RFC2217 parameter negotiation error may appear at
 the end of flashing — the flash and verify still complete successfully.
 
+#### 6.7.1 Local flashing via `POST /api/flash`
+
+**When to use:** classic ESP32 boards behind a USB-serial bridge (CP2102,
+CH340, CH9102) whose external DTR/RTS auto-reset circuit cannot be driven
+reliably through the RFC2217 proxy — esptool reaches the chip but it stays
+in normal boot (`Wrong boot mode detected (0x13)`). Native-USB C3/S3/C6/H2
+chips strap into the bootloader internally and flash fine over RFC2217
+(§6.7); `/api/flash` is the method for the bridge-chip case.
+
+**Behavior:** the portal runs esptool **locally on the Pi**, where the
+DTR/RTS reset works natively. It sets the slot state to `flashing`, stops
+the slot's proxy (freeing the devnode), runs `esptool write-flash`, then
+restarts the proxy and returns to `idle`. The request is **refused if a
+debug session is active** on the slot (stop debug first).
+
+**Request:** `POST /api/flash`, `multipart/form-data`:
+
+| Part | Kind | Meaning |
+|------|------|---------|
+| `slot` | field | Slot label, e.g. `SLOT3` (required) |
+| `chip` | field | esptool chip, default `esp32` |
+| `baud` | field | Flash baud, default `460800` |
+| `erase` | field | `1`/`true` to erase-all first (optional) |
+| `0x1000`, `0x8000`, … | file | One file part **per flash image; the part name is the hex offset**, the content is the binary |
+
+Standard ESP32 (Arduino) layout: `0x1000` bootloader, `0x8000` partitions,
+`0xe000` boot_app0, `0x10000` firmware.
+
+**Response:** `{"ok": bool, "returncode": int, "log": "<esptool output>",
+"error": <string if failed>}`.
+
+**Example:**
+
+```bash
+curl -X POST http://workbench.local:8080/api/flash \
+  -F slot=SLOT3 -F chip=esp32 -F baud=460800 \
+  -F '0x1000=@.pio/build/<env>/bootloader.bin' \
+  -F '0x8000=@.pio/build/<env>/partitions.bin' \
+  -F '0xe000=@boot_app0.bin' \
+  -F '0x10000=@.pio/build/<env>/firmware.bin'
+```
+
+No `POST /api/serial/reset` is needed afterwards — esptool's
+`--after hard-reset` reboots the device into the new firmware.
+
 #### 6.8 RFC2217 Client Best Practices (ttyACM)
 
 When connecting to an ESP32-C3 via RFC2217, the client must prevent DTR
