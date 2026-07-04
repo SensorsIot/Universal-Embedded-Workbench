@@ -11,10 +11,13 @@ import http.server
 import collections
 import json
 import os
+import base64
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -58,6 +61,7 @@ STATE_FLAPPING      = "flapping"
 STATE_RECOVERING    = "recovering"
 STATE_DOWNLOAD_MODE = "download_mode"
 STATE_DEBUGGING     = "debugging"
+STATE_FLASHING      = "flashing"
 
 # Module-level state
 slots: dict[str, dict] = {}
@@ -794,6 +798,78 @@ def stop_proxy(slot: dict) -> bool:
     slot["url"] = None
     slot["last_error"] = None
     return True
+
+
+def flash_slot(slot: dict, images: list, chip: str = "auto",
+               baud: int = 460800, erase: bool = False) -> dict:
+    """Flash *slot*'s device locally with esptool, then restart the proxy.
+
+    A separate flash method for classic ESP32 boards behind a USB-serial bridge
+    (CH340/CP2102/CH9102), whose DTR/RTS auto-reset cannot be driven reliably
+    over the RFC2217 proxy.  esptool runs on the Pi against the local devnode,
+    where the reset works natively.  The native-USB RFC2217 path is unchanged.
+
+    images: [{"offset": "0x1000", "data": b"<raw bytes>"}, ...]
+    """
+    label = slot["label"]
+    if not images:
+        return {"ok": False, "error": "no images provided"}
+
+    with slot["_lock"]:
+        if not slot.get("present"):
+            return {"ok": False, "error": f"{label}: no device present"}
+        if slot["state"] in (STATE_DEBUGGING, STATE_FLASHING):
+            return {"ok": False, "error": f"{label}: busy (state={slot['state']})"}
+        devnode = slot.get("devnode")
+        if not devnode:
+            return {"ok": False, "error": f"{label}: no devnode"}
+
+        slot["state"] = STATE_FLASHING
+        stop_proxy(slot)
+
+        tmpdir = tempfile.mkdtemp(prefix="wbflash_")
+        try:
+            flash_args: list = []
+            for i, img in enumerate(images):
+                off = img.get("offset")
+                data = img.get("data")
+                if off is None or data is None:
+                    raise ValueError(f"image {i}: missing 'offset' or 'data'")
+                fpath = os.path.join(tmpdir, f"img{i}.bin")
+                with open(fpath, "wb") as fh:
+                    fh.write(data)
+                flash_args += [str(off), fpath]
+
+            cmd = ["python3", "-m", "esptool",
+                   "--chip", chip or "auto", "--port", devnode,
+                   "--baud", str(baud),
+                   "--before", "default-reset", "--after", "hard-reset",
+                   "--connect-attempts", "5", "write-flash"]
+            if erase:
+                cmd.append("--erase-all")
+            cmd += flash_args
+
+            log_activity(f"flash({label}): esptool write-flash {len(images)} image(s)", "step")
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+            out = (proc.stdout or "") + (proc.stderr or "")
+            ok = proc.returncode == 0
+            result = {"ok": ok, "returncode": proc.returncode, "log": out[-4000:]}
+            if not ok:
+                result["error"] = f"esptool exited {proc.returncode}"
+        except subprocess.TimeoutExpired:
+            result = {"ok": False, "error": "esptool timed out"}
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            slot["state"] = STATE_IDLE if slot.get("present") else STATE_ABSENT
+            start_proxy(slot)
+
+    if result.get("ok"):
+        log_activity(f"flash({label}) — done", "ok")
+    else:
+        log_activity(f"flash({label}) — {result.get('error', 'failed')}", "error")
+    return result
 
 
 def _make_dynamic_slot(slot_key: str) -> dict:
@@ -1663,6 +1739,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/hotplug":
             self._handle_hotplug()
+        elif path == "/api/flash":
+            self._handle_flash()
         elif path == "/api/serial/reset":
             self._handle_serial_reset()
         elif path == "/api/serial/monitor":
@@ -2237,6 +2315,93 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_activity(f"serial.reset({slot_label}) — done", "ok")
         else:
             log_activity(f"serial.reset({slot_label}) — {result.get('error', 'failed')}", "error")
+        self._send_json(result)
+
+
+    def _parse_multipart(self):
+        """Parse a multipart/form-data body. Returns (fields, files) where fields
+        is {name: text} and files is [{name, filename, content(bytes)}], or
+        (None, None) if the body is invalid (error response already sent)."""
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            self._send_json({"ok": False, "error": "expected multipart/form-data"}, 400)
+            return None, None
+        boundary = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[9:].strip('"')
+        if not boundary:
+            self._send_json({"ok": False, "error": "missing boundary"}, 400)
+            return None, None
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            self._send_json({"ok": False, "error": "empty body"}, 400)
+            return None, None
+        body = self.rfile.read(length)
+        fields, files = {}, []
+        for part in body.split(b"--" + boundary.encode()):
+            part = part.strip()
+            if not part or part == b"--":
+                continue
+            if b"\r\n\r\n" in part:
+                header_section, content = part.split(b"\r\n\r\n", 1)
+            elif b"\n\n" in part:
+                header_section, content = part.split(b"\n\n", 1)
+            else:
+                continue
+            if content.endswith(b"\r\n"):
+                content = content[:-2]
+            headers_text = header_section.decode("utf-8", errors="replace")
+            name = filename = None
+            for token in headers_text.replace("\r", "").split("\n"):
+                if "content-disposition" in token.lower():
+                    for kv in token.split(";"):
+                        kv = kv.strip()
+                        if kv.startswith('name="'):
+                            name = kv[6:].rstrip('"')
+                        elif kv.startswith('filename="'):
+                            filename = kv[10:].rstrip('"')
+            if name is None:
+                continue
+            if filename is not None:
+                files.append({"name": name, "filename": filename, "content": content})
+            else:
+                fields[name] = content.decode("utf-8", errors="replace").strip()
+        return fields, files
+
+    def _handle_flash(self):
+        # multipart/form-data: fields slot [chip] [baud] [erase]; one file part
+        # per flash image, the part name being its hex offset (e.g. name="0x10000").
+        fields, files = self._parse_multipart()
+        if fields is None:
+            return
+        slot_label = fields.get("slot")
+        if not slot_label:
+            self._send_json({"ok": False, "error": "missing 'slot' field"}, 400)
+            return
+        slot = _find_slot_by_label(slot_label)
+        if not slot:
+            self._send_json({"ok": False, "error": f"slot '{slot_label}' not found"}, 404)
+            return
+        if not files:
+            self._send_json({"ok": False, "error": "no firmware image parts"}, 400)
+            return
+        images = []
+        for f in files:
+            off = f["name"]
+            if not off.lower().startswith("0x"):
+                self._send_json({"ok": False, "error": f"image part name '{off}' is not a hex offset"}, 400)
+                return
+            images.append({"offset": off, "data": f["content"]})
+        images.sort(key=lambda im: int(im["offset"], 16))
+        chip = fields.get("chip", "esp32")
+        try:
+            baud = int(fields.get("baud", 460800))
+        except ValueError:
+            baud = 460800
+        erase = fields.get("erase", "").lower() in ("1", "true", "yes")
+        result = flash_slot(slot, images, chip=chip, baud=baud, erase=erase)
         self._send_json(result)
 
 
