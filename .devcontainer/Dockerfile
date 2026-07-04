@@ -33,3 +33,9 @@ RUN mkdir -p /home/dev/.ssh \
 RUN echo 'cd /workspaces/Universal-Embedded-Workbench 2>/dev/null' >> /home/dev/.bashrc
 
 USER dev
+
+# tmux — terminal multiplexer for SSH sessions
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends tmux \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+USER dev
