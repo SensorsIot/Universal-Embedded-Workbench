@@ -41,6 +41,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "default_sample_rate": 250_000,
     "default_duration_s": 10,
     "max_duration_s": 120,
+    "snr_gate_db": 8.0,
     "rtl_433_bin": "rtl_433",
     "rtl_test_bin": "rtl_test",
 }
@@ -120,15 +121,28 @@ class SdrReceiver:
 
     def capture(self, freq_hz: int | None = None, duration_s: int | None = None,
                 protocols: list[int] | None = None,
-                sample_rate: int | None = None) -> dict[str, Any]:
-        """Decode RF for a bounded window; return decoded rtl_433 records."""
+                sample_rate: int | None = None,
+                flex: str | None = None) -> dict[str, Any]:
+        """Decode RF for a bounded window; return decoded rtl_433 records.
+
+        ``flex`` passes an rtl_433 ``-X`` flex-decoder spec (e.g.
+        ``"n=awn,m=OOK_PWM,s=416,l=2150,r=16000"``) to decode a custom
+        protocol — the recapture/verify use case — cutting through band noise
+        that the generic analyzer can't resolve.
+        """
         freq_hz = int(freq_hz or self._config["default_freq_hz"])
         duration_s = self._clamp_duration(duration_s)
+        # "-M level" attaches rssi/snr/noise (dB) to every package so callers
+        # can threshold on signal strength instead of trusting decoder hits,
+        # which fire on band noise too.
         cmd = [self._config["rtl_433_bin"], "-f", str(freq_hz),
                "-s", str(int(sample_rate or self._config["default_sample_rate"])),
-               "-F", "json", "-M", "time:iso", "-T", str(duration_s)]
+               "-F", "json", "-M", "time:iso", "-M", "level",
+               "-T", str(duration_s)]
         for proto in protocols or []:
             cmd += ["-R", str(int(proto))]
+        if flex:
+            cmd += ["-X", str(flex)]
 
         stdout, _ = self._run(cmd, duration_s, mode="decode", freq_hz=freq_hz)
         events: list[dict[str, Any]] = []
@@ -140,8 +154,18 @@ class SdrReceiver:
                 events.append(json.loads(line))
             except ValueError:
                 continue
+        # Signal-vs-noise summary: strongest package's level, and how many
+        # cleared an SNR gate. A real close-range burst reads high SNR; ambient
+        # noise sits near 0. Threshold on `strong` / `max_snr`, not `count`.
+        snrs = [e["snr"] for e in events if isinstance(e.get("snr"), (int, float))]
+        rssis = [e["rssi"] for e in events if isinstance(e.get("rssi"), (int, float))]
+        snr_gate = float(self._config.get("snr_gate_db", 8.0))
+        strong = sum(1 for s in snrs if s >= snr_gate)
         return {"freq_hz": freq_hz, "duration_s": duration_s,
-                "count": len(events), "events": events}
+                "count": len(events), "events": events,
+                "max_snr": max(snrs) if snrs else None,
+                "max_rssi": max(rssis) if rssis else None,
+                "snr_gate_db": snr_gate, "strong": strong}
 
     def analyze(self, freq_hz: int | None = None,
                 duration_s: int | None = None) -> dict[str, Any]:

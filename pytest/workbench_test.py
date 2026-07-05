@@ -4,6 +4,7 @@ These verify the instrument itself works correctly.
 Tests marked @requires_dut need a WiFi device connected; skip with default run.
 """
 
+import json
 import os
 import re
 import socket
@@ -506,6 +507,122 @@ class TestSdr:
             pytest.skip("dongle present — absent path not exercised")
         with pytest.raises(WorkbenchError):
             workbench.sdr_capture(duration_s=2)
+
+    def test_wt1906_flex_decoder_accepted(self, workbench):
+        """WT-1906: A flex (-X) decoder spec is accepted and returns events."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        r = workbench.sdr_capture(
+            duration_s=3, flex="n=awn,m=OOK_PWM,s=416,l=2150,r=16000")
+        assert "events" in r and isinstance(r["events"], list)
+        assert r["count"] == len(r["events"])
+
+    def test_wt1907_reports_signal_levels(self, workbench):
+        """WT-1907: Capture reports rssi/snr level summary and an SNR gate."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        r = workbench.sdr_capture(duration_s=3)
+        assert "snr_gate_db" in r and "strong" in r
+        assert "max_snr" in r and "max_rssi" in r
+        assert isinstance(r["strong"], int) and r["strong"] >= 0
+
+
+# =====================================================================
+# WT-20xx  MQTT Broker
+# =====================================================================
+
+
+class TestMqttBroker:
+    """WT-20xx: workbench mosquitto broker via /api/mqtt/*."""
+
+    def test_wt2000_start_reports_running(self, workbench):
+        """WT-2000: Starting the broker reports running on port 1883."""
+        r = workbench.mqtt_start()
+        assert r.get("ok") is True
+        assert r.get("port") == 1883
+        st = workbench.mqtt_status()
+        assert st.get("running") is True
+
+    def test_wt2001_status_when_stopped(self, workbench):
+        """WT-2001: After stop, status reports not running."""
+        workbench.mqtt_stop()
+        st = workbench.mqtt_status()
+        assert st.get("running") is False
+
+    def test_wt2002_start_idempotent(self, workbench):
+        """WT-2002: Starting an already-running broker is a no-op success."""
+        workbench.mqtt_start()
+        r = workbench.mqtt_start()
+        assert r.get("ok") is True and r.get("port") == 1883
+        workbench.mqtt_stop()
+
+
+# =====================================================================
+# WT-21xx  Captive-Portal Provisioning (WiFiManager DUT onto NAT AP)
+# =====================================================================
+
+
+@pytest.mark.requires_dut
+class TestCaptivePortal:
+    """WT-21xx: provision a WiFiManager DUT (the awning on SLOT3) onto a
+    NAT-bridged workbench AP and verify it reaches the LAN. Mirrors the
+    proven end-to-end flow; needs the awning wired to SLOT3 (--run-dut)."""
+
+    SLOT = "SLOT3"
+    AP_SSID = "awning-net"
+    AP_PASS = "awningpass"
+    PORTAL = "Awning-Setup"
+
+    def _awning_status(self, workbench, ip):
+        import base64
+        r = workbench.wifi_http(f"http://{ip}/api/status", timeout=6)
+        body = r.get("body", "")
+        try:
+            body = base64.b64decode(body).decode(errors="replace")
+        except Exception:
+            pass
+        return json.loads(body)
+
+    def test_wt2100_provision_and_reach_lan(self, workbench):
+        """WT-2100/2101/2102: captive-portal provisioning end-to-end."""
+        # Broker on the Pi's LAN address so MQTT proves NAT-to-LAN.
+        workbench.mqtt_start()
+        lan_ip = os.environ.get("WORKBENCH_LAN_IP", "192.168.0.87")
+
+        # Clear the DUT's saved creds (double reset within DRD window) so it
+        # re-enters its captive portal.
+        workbench.serial_reset(slot=self.SLOT)
+        time.sleep(2)
+        workbench.serial_reset(slot=self.SLOT)
+        time.sleep(8)  # let it boot into the portal AP
+
+        # Provision via WiFiManager /wifisave onto a NAT-bridged AP.
+        workbench.provision_wifimanager(
+            self.PORTAL, self.AP_SSID, self.AP_PASS,
+            extra={"host": lan_ip, "port": "1883"}, internet=True)
+
+        # WT-2101: the DUT joins the workbench AP.
+        ip = None
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            stations = workbench.ap_status().get("stations", [])
+            if stations:
+                ip = stations[0].get("ip")
+                break
+            time.sleep(3)
+        assert ip, "DUT never joined the workbench AP"
+
+        st = self._awning_status(workbench, ip)
+        assert st.get("wifi") is True
+
+        # WT-2102: the DUT reaches the LAN broker via NAT.
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if self._awning_status(workbench, ip).get("mqtt"):
+                break
+            time.sleep(3)
+        assert self._awning_status(workbench, ip).get("mqtt") is True, \
+            "DUT did not reach the LAN MQTT broker (NAT-to-LAN failed)"
 
 
 # =====================================================================

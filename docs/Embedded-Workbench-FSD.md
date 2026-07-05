@@ -832,7 +832,7 @@ serial-interface mode.
 | GET | /api/wifi/ping | Version and uptime |
 | GET | /api/wifi/mode | Current operating mode |
 | POST | /api/wifi/mode | Switch operating mode |
-| POST | /api/wifi/ap_start | Start SoftAP (WiFi state → AP) |
+| POST | /api/wifi/ap_start | Start SoftAP (WiFi state → AP); `{internet: true}` NAT-bridges to LAN (FR-011) |
 | POST | /api/wifi/ap_stop | Stop SoftAP (WiFi state → Idle) |
 | GET | /api/wifi/ap_status | AP status, SSID, channel, stations |
 | POST | /api/wifi/sta_join | Join WiFi network as station (WiFi state → Captive) |
@@ -870,45 +870,76 @@ serial-interface mode.
 | POST | /api/sdr/capture | Decode RF for a bounded window (FR-028) |
 | POST | /api/sdr/analyze | Pulse-analyzer capture for recapturing a remote (FR-028) |
 | POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
+| **MQTT Broker** | | |
+| GET | /api/mqtt/status | Broker running state + port (FR-029) |
+| POST | /api/mqtt/start | Start the mosquitto test broker (FR-029) |
+| POST | /api/mqtt/stop | Stop the broker (FR-029) |
 | **Composite** | | |
 | GET | /api/log | Activity log (timestamped entries, filterable with `?since=`) |
 | POST | /api/enter-portal | Ensure device is connected to workbench AP — provision via captive portal if needed |
 
 #### Enter-Portal Composite Operation
 
-`POST /api/enter-portal` ensures a DUT is connected to the workbench's WiFi AP.
-If the device already has credentials it connects directly.  If not, the
-workbench joins the device's captive portal SoftAP, fills in its own AP
-credentials, and waits for the device to reboot and connect.
+`POST /api/enter-portal` provisions a DUT that is showing a captive portal.
+The workbench joins the DUT's portal SoftAP, submits the credentials of the
+AP the workbench will then offer, disconnects, and raises that AP so the DUT
+reboots and connects to it. The DUT ends up on the workbench's WiFi network.
+
+The portal form contract is parameterized so different DUT firmwares are
+supported. The defaults target the WiFi-Tester DUT (`POST /connect` with
+`ssid`/`password`); a WiFiManager DUT (e.g. the awning controller) uses
+`save_path="/wifisave"`, `field_ssid="s"`, `field_password="p"`, and passes
+its extra portal fields (MQTT host/port/user/pass) via `extra`.
 
 **Request body:**
 ```json
-{"portal_ssid": "iOS-Keyboard-Setup", "ssid": "TestAP", "password": "testpass123"}
+{"portal_ssid": "Awning-Setup", "ssid": "awning-net", "password": "awningpass",
+ "save_path": "/wifisave", "field_ssid": "s", "field_password": "p",
+ "method": "POST", "internet": true,
+ "extra": {"host": "192.168.0.87", "port": "1883"}}
 ```
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `portal_ssid` | Yes | The device's captive portal SoftAP name |
-| `ssid` | Yes | Workbench AP SSID (filled into portal form, used to start AP) |
-| `password` | Yes | Workbench AP password (filled into portal form, used to start AP) |
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `portal_ssid` | Yes | — | The DUT's captive-portal SoftAP name |
+| `ssid` | Yes | — | Workbench AP SSID (submitted to the portal, then started) |
+| `password` | Yes | — | Workbench AP password |
+| `save_path` | No | `/connect` | Portal form endpoint (WiFiManager: `/wifisave`) |
+| `field_ssid` | No | `ssid` | Form field name for the SSID (WiFiManager: `s`) |
+| `field_password` | No | `password` | Form field name for the password (WiFiManager: `p`) |
+| `method` | No | `POST` | Form submit method (`GET` or `POST`) |
+| `extra` | No | — | Additional form fields, e.g. MQTT `host`/`port`/`user`/`pass` |
+| `internet` | No | `false` | Start the workbench AP NAT-bridged to `eth0` (FR-011) so the DUT reaches the LAN/internet |
 
 **Procedure:**
-1. Ensure the workbench's AP is running with `ssid`/`password` (start it if not)
-2. Wait for the DUT to connect to the workbench AP (short timeout)
-3. If connected → done (device already has credentials)
-4. If not connected → device is in captive portal mode:
-   a. Join the DUT's captive portal SoftAP (`portal_ssid`)
-   b. Make an HTTP request, follow the captive portal redirect
-   c. Parse the portal HTML form, fill in `ssid` and `password`
-   d. Submit the form
-   e. Disconnect from the DUT's SoftAP
-   f. Wait for the DUT to reboot and connect to the workbench AP
+1. Join the DUT's captive-portal SoftAP (`portal_ssid`)
+2. Submit `{field_ssid: ssid, field_password: password, **extra}` to
+   `http://<portal_ip><save_path>` using `method`
+3. Disconnect from the DUT's SoftAP
+4. Start the workbench AP (`ssid`/`password`); with `internet: true` the AP is
+   NAT-bridged to the LAN. The DUT reboots and connects to it.
 
-Each step is logged to the activity log.  Progress is observable via
-`GET /api/log?since=<ts>`.
+Each step is logged to the activity log (`GET /api/log?since=<ts>`).
 
-**Response:** `{"ok": true}` on success; `{"ok": false, "error": "..."}` on
-failure (e.g., unable to join SoftAP, portal form not found)
+**Response:** `{"ok": true, "message": "enter-portal started in background"}` —
+the flow runs asynchronously; observe completion via the activity log and
+`GET /api/wifi/ap_status` (the DUT appears as a station).
+
+**Captive-portal provisioning test (WT-2100–2102).** End-to-end provisioning
+of a WiFiManager DUT onto a NAT-bridged AP, verifying it reaches the LAN:
+
+1. DUT is unprovisioned and broadcasting its portal SoftAP (`portal_ssid`).
+2. `POST /api/mqtt/start` — bring up the broker on the Pi's LAN address.
+3. `POST /api/enter-portal` with the WiFiManager form params and
+   `internet: true`, submitting the workbench AP creds and an `extra` MQTT
+   `host` set to the Pi's LAN IP (`192.168.0.x`).
+4. The workbench joins the portal, submits `/wifisave` (HTTP 200), disconnects,
+   and raises the NAT AP. The DUT reboots and connects.
+5. **WT-2101** — `GET /api/wifi/ap_status` shows the DUT as a station with a
+   `192.168.4.x` lease; `POST /api/wifi/http` relay to the DUT's status
+   endpoint returns `wifi: true`.
+6. **WT-2102** — the DUT's status shows `mqtt: true`, proving it reached the
+   LAN broker at `192.168.0.x:1883` through the NAT-bridged AP.
 
 ### FR-011 — AP Mode
 
@@ -924,6 +955,12 @@ The Pi's wlan0 runs hostapd + dnsmasq to create a SoftAP:
 - **AP status** (`GET /api/wifi/ap_status`): returns `{active, ssid, channel, stations[]}`
 - Starting AP while AP is already running restarts with new configuration
 - AP and STA are mutually exclusive — starting one stops the other
+- **Internet bridging:** `POST /api/wifi/ap_start` with `{internet: true}`
+  NAT-bridges the AP to the LAN — it enables `net.ipv4.ip_forward`, adds an
+  `iptables` `MASQUERADE` on `eth0` and the `wlan0↔eth0` FORWARD rules
+  (idempotently), and configures dnsmasq to forward DNS. AP clients (e.g. a
+  provisioned DUT on `192.168.4.x`) then reach the Pi's LAN (`192.168.0.x`)
+  and the internet. Used by `enter-portal` with `internet: true`.
 
 ### FR-012 — Captive Mode (STA)
 
@@ -2343,7 +2380,7 @@ terminates an active capture early.
 | Method | Endpoint | Body / Query | Description |
 |--------|----------|--------------|-------------|
 | GET | /api/sdr/status | — | Tool/dongle detection + active-capture state |
-| POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?}` | Decode RF for a window; returns decoded records |
+| POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?, flex?}` | Decode RF for a window; returns decoded records + signal levels |
 | POST | /api/sdr/analyze | `{freq_hz?, duration_s?}` | Pulse-analyzer capture for recapturing a remote |
 | POST | /api/sdr/stop | — | Terminate an in-progress capture |
 
@@ -2355,10 +2392,20 @@ Parameters for `capture`:
 - `protocols` (int[], optional) — `rtl_433` protocol numbers to restrict
   decoding to; omitted means all enabled decoders.
 - `sample_rate` (int, optional) — sample rate in Hz (default 250 kHz).
+- `flex` (string, optional) — an `rtl_433` `-X` flex-decoder spec (e.g.
+  `"n=awn,m=OOK_PWM,s=416,l=2150,r=16000"`) to decode a custom protocol.
+  This is the recapture/verify path — it cuts through band noise the generic
+  analyzer can't resolve.
 
-The `decode` response is `{freq_hz, duration_s, count, events}`; `events`
-is the list of `rtl_433` JSON records. The `analyze` response is
-`{freq_hz, duration_s, analyzer}` where `analyzer` is the raw pulse text.
+Captures run `rtl_433 -M level`, so each decoded record carries `rssi`,
+`snr`, and `noise` (dB). The `decode` response is
+`{freq_hz, duration_s, count, events, max_snr, max_rssi, strong, snr_gate_db}`:
+`events` is the list of `rtl_433` JSON records; `max_snr`/`max_rssi` are the
+strongest package's levels; `strong` is the count of packages at or above
+`snr_gate_db`. Callers distinguish signal from noise by thresholding on
+`strong`/`max_snr` rather than trusting raw decode hits, which also fire on
+ambient noise. The `analyze` response is `{freq_hz, duration_s, analyzer}`
+where `analyzer` is the raw pulse text (ANSI-stripped).
 
 #### 28.4 Configuration
 
@@ -2371,6 +2418,7 @@ is the list of `rtl_433` JSON records. The `analyze` response is
   "default_sample_rate": 250000,
   "default_duration_s": 10,
   "max_duration_s": 120,
+  "snr_gate_db": 8.0,
   "rtl_433_bin": "rtl_433",
   "rtl_test_bin": "rtl_test"
 }
@@ -2380,11 +2428,31 @@ is the list of `rtl_433` JSON records. The `analyze` response is
 
 ```python
 wt.sdr_status()
-wt.sdr_capture(freq_hz=433_920_000, duration_s=15)     # decode → {count, events}
+wt.sdr_capture(freq_hz=433_920_000, duration_s=15)     # decode → {count, events, max_snr}
 wt.sdr_capture(protocols=[12], duration_s=30)          # restrict to one decoder
+wt.sdr_capture(flex="n=awn,m=OOK_PWM,s=416,l=2150,r=16000")  # custom-protocol decode
 wt.sdr_analyze(freq_hz=433_920_000, duration_s=10)     # recapture a remote
 wt.sdr_stop()
 ```
+
+---
+
+### FR-029 — MQTT Broker
+
+An on-demand mosquitto broker for testing DUT MQTT clients, backed by
+`mqtt_controller.py`. The broker is open (anonymous, no auth) and listens on
+all interfaces at port 1883, so it is reachable both from the workbench AP
+(`192.168.4.1:1883`) and from the Pi's LAN address (`192.168.0.x:1883`) — a
+DUT on a NAT-bridged AP (FR-011) reaching the LAN address exercises the full
+provisioned network path.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/mqtt/status | `{running, port}` |
+| POST | /api/mqtt/start | Start the broker (idempotent); returns `{port}` |
+| POST | /api/mqtt/stop | Stop the broker |
+
+The broker is a portal-managed subprocess and stops when the portal restarts.
 
 ---
 
@@ -2690,6 +2758,15 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | WT-1903 | SDR analyze returns pulse timing | SDR Receiver | Yes |
 | WT-1904 | SDR capture rejects concurrent request | SDR Receiver | Yes |
 | WT-1905 | SDR capture clean error when dongle absent | SDR Receiver | No |
+| WT-1906 | SDR flex decoder returns custom-protocol packets | SDR Receiver | Yes |
+| WT-1907 | SDR reports rssi/snr; strong-gate separates signal from noise | SDR Receiver | Yes |
+| WT-1908 | SDR RF path: DUT-transmit window has higher SNR than quiet baseline | RF Path | Yes |
+| WT-2000 | MQTT broker start reports running + port 1883 | MQTT Broker | No |
+| WT-2001 | MQTT broker status when stopped | MQTT Broker | No |
+| WT-2002 | MQTT broker start is idempotent | MQTT Broker | No |
+| WT-2100 | Captive-portal provisioning of a WiFiManager DUT | Captive Portal | Yes |
+| WT-2101 | Provisioned DUT joins the workbench AP (appears as station) | Captive Portal | Yes |
+| WT-2102 | NAT-bridged AP: DUT reaches the LAN broker (192.168.0.x MQTT) | Captive Portal | Yes |
 | WT-1400 | Debug start (USB JTAG) | Debug: USB JTAG | Yes |
 | WT-1401 | Debug stop restores serial | Debug: USB JTAG | Yes |
 | WT-1402 | Debug status | Debug: USB JTAG | Yes |
@@ -2756,6 +2833,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 9.0 | 2026-04-27 | Claude | Signal generator cleanup: retired the legacy `/api/cw/*` API and `cw_beacon.py` shim. FR-023 (CW beacon, GPCLK-only) merged into FR-027 (Signal Generator). FR-027 now covers Morse keying, the `freq`, `status`, and `frequencies` endpoints, and the full PE4302 attenuator path. Driver `cw_*` methods removed; tests WT-1300–1304 retargeted at `siggen_*`. Skill `cw-beacon` replaced by `signal-generator`. |
 | 9.1 | 2026-04-28 | Codex | Si5351 output level handling documented: backend programs the lowest 2 mA CLK drive-current setting and leaves precise RF level control to the PE4302 attenuator. |
 | 9.2 | 2026-07-05 | Claude | SDR receiver (FR-028): RTL-SDR + `rtl_433` receive-side service, counterpart to the transmit-only signal generator. `decode` mode returns decoded records (remotes/sensors/TPMS); `analyze` mode returns raw pulse timing for recapturing OOK remotes. Single-instance, bounded captures. New `sdr_controller.py`; 4 API endpoints `/api/sdr/{status,capture,analyze,stop}`; driver methods `sdr_*`; WT-1900–1905 test cases. |
+| 9.3 | 2026-07-05 | Claude | Captive-portal provisioning + LAN bridge, verified against the LoRa32 awning (WiFiManager DUT). `enter-portal` parameterized for arbitrary portal forms (WiFiManager `/wifisave`, `s`/`p` + `extra` MQTT fields) with an `internet` option; AP mode gains NAT bridging to `eth0` (`ap_start internet=true`, FR-011) so a provisioned DUT reaches the LAN/internet; MQTT broker wired to the API (FR-029, `/api/mqtt/*`, `mqtt_controller.py`). SDR (FR-028) gains a `flex` `-X` custom-decoder param and `-M level` rssi/snr signal-vs-noise reporting. Test cases WT-1906–1908 (SDR flex/RSSI, RF path), WT-2000–2002 (broker), WT-2100–2102 (captive-portal provisioning). |
 
 ---
 
@@ -3146,6 +3224,7 @@ Add this to /etc/rfc2217/workbench.json:
 | `workbench_test.py` | End-to-end workbench tests (WT-100 through WT-1805) |
 | `signal_generator.py` | Unified RF source — Si5351 + optional PE4302 attenuator, GPCLK fallback, Morse keyer |
 | `sdr_controller.py` | RTL-SDR receiver — rtl_433 decode + pulse-analyzer recapture (receive-side of `signal_generator`) |
+| `mqtt_controller.py` | On-demand mosquitto test broker (open, all-interfaces) for DUT MQTT-client testing (FR-029) |
 | `si5351.py` | Si5351A I²C clock-generator driver |
 | `pe4302.py` | PE4302 3-wire serial step-attenuator driver |
 | `gpclk.py` | BCM2835/7 GPCLK hardware clock primitive (GPIO 5/6) |

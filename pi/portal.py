@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlparse
 
 import debug_controller
 import gpiod
+import mqtt_controller
 import wifi_controller
 try:
     import ble_controller
@@ -1590,13 +1591,23 @@ def _release_slot_gpio(slot: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _do_enter_portal(portal_ssid: str, wifi_ssid: str, wifi_password: str,
-                     portal_ip: str = "192.168.4.1"):
+                     portal_ip: str = "192.168.4.1",
+                     save_path: str = "/connect",
+                     field_ssid: str = "ssid", field_password: str = "password",
+                     extra: "dict | None" = None, method: str = "POST",
+                     internet: bool = False):
     """Connect to a device's captive portal SoftAP and submit WiFi credentials.
 
     1. Join the device's SoftAP (portal_ssid, open network)
-    2. POST credentials to the device's captive portal
+    2. Submit credentials to the device's captive-portal save form
     3. Disconnect from SoftAP
     4. Start our own AP with the submitted credentials so the device can connect
+
+    The form contract is parameterized so different DUT portals are supported.
+    Defaults target the WiFi-Tester DUT (`POST /connect`, ssid/password). For a
+    WiFiManager DUT pass save_path="/wifisave", field_ssid="s",
+    field_password="p", and any custom params via `extra`. With internet=True
+    the step-4 AP is NAT-bridged to eth0 so the DUT reaches the LAN/internet.
     """
     import urllib.parse
 
@@ -1609,22 +1620,25 @@ def _do_enter_portal(portal_ssid: str, wifi_ssid: str, wifi_password: str,
         log_activity(f"Failed to join '{portal_ssid}': {e}", "error")
         return
 
-    # -- Step 2: POST WiFi credentials to the captive portal --
+    # -- Step 2: submit WiFi credentials to the captive portal --
     log_activity(f"Submitting credentials (SSID: {wifi_ssid}) to captive portal...", "step")
     try:
-        form_data = urllib.parse.urlencode({
-            "ssid": wifi_ssid,
-            "password": wifi_password,
-        }).encode("utf-8")
+        fields = {field_ssid: wifi_ssid, field_password: wifi_password}
+        if extra:
+            fields.update(extra)
+        query = urllib.parse.urlencode(fields)
         import base64
-        body_b64 = base64.b64encode(form_data).decode("ascii")
+        url = f"http://{portal_ip}{save_path}"
+        headers = {}
+        body_b64 = None
+        if method.upper() == "GET":
+            url = f"{url}?{query}"
+        else:
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            body_b64 = base64.b64encode(query.encode("utf-8")).decode("ascii")
         resp = wifi_controller.http_relay(
-            method="POST",
-            url=f"http://{portal_ip}/connect",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            body=body_b64,
-            timeout=10,
-        )
+            method=method.upper(), url=url, headers=headers,
+            body=body_b64, timeout=10)
         log_activity(f"Portal responded with status {resp.get('status', '?')}", "ok")
     except Exception as e:
         log_activity(f"Failed to submit credentials: {e}", "error")
@@ -1637,9 +1651,11 @@ def _do_enter_portal(portal_ssid: str, wifi_ssid: str, wifi_password: str,
         log_activity(f"sta_leave error (non-fatal): {e}", "info")
 
     # -- Step 4: start our AP so the device can connect to us --
-    log_activity(f"Starting AP '{wifi_ssid}' for device to connect...", "step")
+    log_activity(f"Starting AP '{wifi_ssid}'{' (internet)' if internet else ''} "
+                 f"for device to connect...", "step")
     try:
-        result = wifi_controller.ap_start(wifi_ssid, password=wifi_password)
+        result = wifi_controller.ap_start(wifi_ssid, password=wifi_password,
+                                          internet=internet)
         log_activity(
             f"AP '{wifi_ssid}' running — IP: {result.get('ip', '?')}. "
             f"Waiting for device to connect...",
@@ -1728,6 +1744,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_siggen_frequencies(qs)
         elif path == "/api/sdr/status":
             self._handle_sdr_status()
+        elif path == "/api/mqtt/status":
+            self._send_json({"ok": True, **mqtt_controller.status()})
         elif path == "/api/udplog":
             qs = parse_qs(parsed.query)
             self._handle_get_udplog(qs)
@@ -1808,6 +1826,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_analyze()
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
+        elif path == "/api/mqtt/start":
+            try:
+                self._send_json({"ok": True, **mqtt_controller.start()})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+        elif path == "/api/mqtt/stop":
+            mqtt_controller.stop()
+            self._send_json({"ok": True})
         elif path == "/api/firmware/upload":
             self._handle_firmware_upload()
         elif path == "/api/flash":
@@ -2197,8 +2223,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         password = body.get("pass", "")
         channel = body.get("channel", 6)
+        internet = bool(body.get("internet", False))
         try:
-            result = wifi_controller.ap_start(ssid, password, channel)
+            result = wifi_controller.ap_start(ssid, password, channel,
+                                              internet=internet)
             self._send_json({"ok": True, **result})
         except Exception as e:
             self._send_json({"ok": False, "error": str(e)})
@@ -2523,6 +2551,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         portal_ip = body.get("portal_ip", "192.168.4.1")
         wifi_ssid = body.get("ssid", "")
         wifi_password = body.get("password", "")
+        # Portal form contract (defaults = WiFi-Tester DUT; override for
+        # WiFiManager: save_path="/wifisave", field_ssid="s", field_password="p").
+        save_path = body.get("save_path", "/connect")
+        field_ssid = body.get("field_ssid", "ssid")
+        field_password = body.get("field_password", "password")
+        extra = body.get("extra")
+        method = body.get("method", "POST")
+        internet = bool(body.get("internet", False))
 
         if not wifi_ssid:
             self._send_json({"ok": False, "error": "ssid is required"})
@@ -2538,7 +2574,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         def _bg_enter_portal():
             global _enter_portal_running
             try:
-                _do_enter_portal(portal_ssid, wifi_ssid, wifi_password, portal_ip)
+                _do_enter_portal(portal_ssid, wifi_ssid, wifi_password, portal_ip,
+                                 save_path=save_path, field_ssid=field_ssid,
+                                 field_password=field_password, extra=extra,
+                                 method=method, internet=internet)
             except Exception as e:
                 log_activity(f"Enter-portal error: {e}", "error")
             finally:
@@ -3333,7 +3372,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 freq_hz=body.get("freq_hz"),
                 duration_s=body.get("duration_s"),
                 protocols=body.get("protocols"),
-                sample_rate=body.get("sample_rate"))
+                sample_rate=body.get("sample_rate"),
+                flex=body.get("flex"))
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         log_activity(

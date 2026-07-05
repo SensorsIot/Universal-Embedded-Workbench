@@ -223,11 +223,37 @@ def _flush_addr():
 # AP Mode
 # ---------------------------------------------------------------------------
 
-def ap_start(ssid, password="", channel=6, dns_logging=False):
+def _enable_nat():
+    """Bridge the wlan0 AP to the LAN/internet via NAT masquerade on eth0.
+
+    Lets AP clients (e.g. a provisioned DUT on 192.168.4.x) reach the Pi's
+    own LAN (192.168.0.x) and the internet. Rules are added idempotently.
+    """
+    subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"],
+                   capture_output=True, check=False)
+    # (table, chain, rule-args) — added only if not already present (-C).
+    rules = [
+        ("nat", "POSTROUTING", ["-o", "eth0", "-j", "MASQUERADE"]),
+        ("filter", "FORWARD", ["-i", WLAN_IF, "-o", "eth0", "-j", "ACCEPT"]),
+        ("filter", "FORWARD", ["-i", "eth0", "-o", WLAN_IF, "-m", "state",
+                               "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"]),
+    ]
+    for table, chain, args in rules:
+        base = ["iptables", "-t", table]
+        exists = subprocess.run(base + ["-C", chain] + args,
+                                capture_output=True, check=False).returncode == 0
+        if not exists:
+            subprocess.run(base + ["-A", chain] + args,
+                           capture_output=True, check=False)
+
+
+def ap_start(ssid, password="", channel=6, dns_logging=False, internet=False):
     """Start SoftAP on wlan0. Returns dict with ip.
 
     If dns_logging=True, dnsmasq is configured with DNS forwarding
     (8.8.8.8/8.8.4.4) and query logging for the sniffer.
+    If internet=True, DNS forwarding is enabled and wlan0 is NAT-bridged to
+    eth0 so AP clients reach the LAN/internet.
     """
     global _ap_active, _ap_ssid, _ap_password, _ap_channel
     global _ap_hostapd_proc, _ap_dnsmasq_proc
@@ -274,13 +300,10 @@ def ap_start(ssid, password="", channel=6, dns_logging=False):
             "no-daemon",
             "log-dhcp",
         ]
+        if dns_logging or internet:
+            dnsmasq_lines += ["server=8.8.8.8", "server=8.8.4.4"]
         if dns_logging:
-            dnsmasq_lines += [
-                "server=8.8.8.8",
-                "server=8.8.4.4",
-                "log-queries",
-                f"log-facility={dns_log}",
-            ]
+            dnsmasq_lines += ["log-queries", f"log-facility={dns_log}"]
         if os.path.exists(lease_script):
             dnsmasq_lines.append(f"dhcp-script={lease_script}")
 
@@ -315,13 +338,17 @@ def ap_start(ssid, password="", channel=6, dns_logging=False):
             _kill_proc(_ap_hostapd_proc)
             raise RuntimeError(f"dnsmasq failed to start: {out[:500]}")
 
+        if internet:
+            _enable_nat()
+
         _ap_active = True
         _ap_ssid = ssid
         _ap_password = password
         _ap_channel = channel
         _stations.clear()
 
-        logger.info("AP started: ssid=%s channel=%d ip=%s", ssid, channel, AP_IP)
+        logger.info("AP started: ssid=%s channel=%d ip=%s internet=%s",
+                    ssid, channel, AP_IP, internet)
         return {"ip": AP_IP}
 
 

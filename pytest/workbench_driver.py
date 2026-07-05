@@ -146,11 +146,11 @@ class WorkbenchDriver:
     # ── AP management ────────────────────────────────────────────────
 
     def ap_start(self, ssid: str, password: str = "",
-                 channel: int = 6) -> dict:
-        args = {"ssid": ssid, "channel": channel}
+                 channel: int = 6, internet: bool = False) -> dict:
+        args = {"ssid": ssid, "channel": channel, "internet": internet}
         if password:
             args["pass"] = password
-        result = self._api_post("/api/wifi/ap_start", args, timeout=10)
+        result = self._api_post("/api/wifi/ap_start", args, timeout=15)
         return {k: v for k, v in result.items() if k != "ok"}
 
     def ap_stop(self) -> None:
@@ -159,6 +159,45 @@ class WorkbenchDriver:
     def ap_status(self) -> dict:
         result = self._api_get("/api/wifi/ap_status", timeout=10)
         return {k: v for k, v in result.items() if k != "ok"}
+
+    def wifi_http(self, url: str, method: str = "GET",
+                  headers: Optional[dict] = None, body: str = None,
+                  timeout: int = 8) -> dict:
+        """Relay an HTTP request through the Pi's radio to a device on its net."""
+        args = {"method": method, "url": url, "timeout": timeout}
+        if headers:
+            args["headers"] = headers
+        if body is not None:
+            args["body"] = body
+        return self._api_post("/api/wifi/http", args, timeout=timeout + 5)
+
+    # ── MQTT broker (FR-029) ──────────────────────────────────────────
+
+    def mqtt_start(self) -> dict:
+        """Start the workbench mosquitto test broker (open, all interfaces)."""
+        return self._api_post("/api/mqtt/start", {}, timeout=15)
+
+    def mqtt_stop(self) -> None:
+        self._api_post("/api/mqtt/stop", {}, timeout=10)
+
+    def mqtt_status(self) -> dict:
+        return self._api_get("/api/mqtt/status")
+
+    # ── Captive-portal provisioning (FR-012 composite) ────────────────
+
+    def provision_wifimanager(self, portal_ssid: str, ssid: str, password: str,
+                              extra: Optional[dict] = None,
+                              internet: bool = True) -> dict:
+        """Provision a WiFiManager DUT onto the workbench AP via its captive
+        portal (POST /wifisave, s/p + extra), NAT-bridged when internet=True.
+
+        Runs asynchronously on the portal; poll ap_status for the DUT to join.
+        """
+        return self._api_post("/api/enter-portal", {
+            "portal_ssid": portal_ssid, "ssid": ssid, "password": password,
+            "save_path": "/wifisave", "field_ssid": "s", "field_password": "p",
+            "method": "POST", "internet": internet, "extra": extra or {},
+        }, timeout=15)
 
     # ── STA management ───────────────────────────────────────────────
 
@@ -478,7 +517,8 @@ class WorkbenchDriver:
     def sdr_capture(self, freq_hz: Optional[int] = None,
                     duration_s: Optional[int] = None,
                     protocols: Optional[list] = None,
-                    sample_rate: Optional[int] = None) -> dict:
+                    sample_rate: Optional[int] = None,
+                    flex: Optional[str] = None) -> dict:
         """Decode RF for a bounded window; returns decoded rtl_433 records.
 
         Args:
@@ -486,6 +526,8 @@ class WorkbenchDriver:
             duration_s: Capture window in seconds (clamped to max_duration_s).
             protocols: Optional list of rtl_433 protocol numbers to restrict to.
             sample_rate: Optional sample rate in Hz.
+            flex: Optional rtl_433 -X flex-decoder spec for a custom protocol,
+                  e.g. "n=awn,m=OOK_PWM,s=416,l=2150,r=16000".
 
         Returns:
             {freq_hz, duration_s, count, events: [ {rtl_433 record}, ... ]}.
@@ -499,6 +541,8 @@ class WorkbenchDriver:
             body["protocols"] = protocols
         if sample_rate is not None:
             body["sample_rate"] = sample_rate
+        if flex is not None:
+            body["flex"] = flex
         return self._api_post("/api/sdr/capture", body, timeout=150)
 
     def sdr_analyze(self, freq_hz: Optional[int] = None,
