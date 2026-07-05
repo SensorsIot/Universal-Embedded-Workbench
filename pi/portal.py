@@ -3727,6 +3727,8 @@ _UI_HTML = """\
         .siggen-hw .off { color: #dc3545; }
         .siggen-state { color: #f0a030; font-weight: bold; }
         .sdr-section { margin: 20px 0 0; }
+        .sdr-section .siggen-row label { min-width: auto; }
+        .sdr-section .fld { display: inline-flex; align-items: center; gap: 6px; }
         .sdr-section .chk { display: flex; align-items: center; gap: 4px; color: #ccc; min-width: auto; font-size: 0.9em; }
         .rssi-meter { position: relative; flex: 1; min-width: 220px; height: 18px; border-radius: 9px;
             background: linear-gradient(90deg, #6c3483 0%, #2980b9 18%, #2ecc71 42%, #2ecc71 66%, #f1c40f 84%, #e74c3c 100%); }
@@ -3799,25 +3801,25 @@ _UI_HTML = """\
         <h2>SDR Console (rtl_433)</h2>
         <div class="siggen-box">
             <div class="siggen-row">
-                <label>Bands</label>
-                <label class="chk"><input type="checkbox" class="sdr-band" value="433920000" checked> 433.92</label>
-                <label class="chk"><input type="checkbox" class="sdr-band" value="315000000"> 315</label>
-                <label class="chk"><input type="checkbox" class="sdr-band" value="868300000"> 868</label>
-                <label>Hop&nbsp;s</label>
-                <input type="number" id="sdr-hop" value="5" min="1" max="60" style="width:60px">
-                <label>Mode</label>
-                <select id="sdr-mode" onchange="sdrModeChange()">
-                    <option value="decode">decode (all)</option>
-                    <option value="flex">flex (-X)</option>
-                    <option value="analyze">analyze (-A)</option>
-                </select>
+                <span class="fld"><label>Bands</label>
+                    <label class="chk"><input type="checkbox" class="sdr-band" value="433920000" checked> 433.92</label>
+                    <label class="chk"><input type="checkbox" class="sdr-band" value="315000000"> 315</label>
+                    <label class="chk"><input type="checkbox" class="sdr-band" value="868300000"> 868</label></span>
+                <span class="fld"><label>Hop&nbsp;s</label>
+                    <input type="number" id="sdr-hop" value="5" min="1" max="60" style="width:60px"></span>
+                <span class="fld"><label>Mode</label>
+                    <select id="sdr-mode" onchange="sdrModeChange()">
+                        <option value="decode">decode (all)</option>
+                        <option value="flex">flex (-X)</option>
+                        <option value="analyze">analyze (-A)</option>
+                    </select></span>
                 <button onclick="sdrLiveStart()">Start</button>
                 <button class="stop" onclick="sdrLiveStop()">Stop</button>
                 <button type="button" onclick="sdrReset()" title="USB-reset a wedged dongle">Reset dongle</button>
             </div>
             <div class="siggen-row">
-                <label>Gain</label>
-                <label class="chk"><input type="checkbox" id="sdr-agc" checked onchange="sdrToggleAgc()"> AGC</label>
+                <span class="fld"><label>Gain</label>
+                    <label class="chk"><input type="checkbox" id="sdr-agc" checked onchange="sdrToggleAgc()"> AGC</label></span>
                 <input type="range" id="sdr-gain" min="0" max="49.6" step="0.1" value="25" disabled
                     oninput="document.getElementById('sdr-gain-val').textContent=this.value+' dB'">
                 <span id="sdr-gain-val" style="min-width:56px;color:#e0e0e0">auto</span>
@@ -4278,6 +4280,7 @@ setInterval(fetchLog, 1500);   // snappier activity log for live operator prompt
 
 // ── SDR Console ──────────────────────────────────────────────────────
 let sdrSince = 0, sdrTimer = null, sdrRawBuf = [], sdrAnBuf = [];
+let sdrLines = 0, sdrEvents = 0, sdrCmd = '';
 
 function sdrToggleAgc() {
     const agc = document.getElementById('sdr-agc').checked;
@@ -4344,7 +4347,10 @@ async function sdrLiveStart() {
     document.getElementById('sdr-tbody').innerHTML = '';
     document.getElementById('sdr-view-analyzer').textContent = '';
     document.getElementById('sdr-view-raw').textContent = '';
-    st.textContent = 'LIVE — ' + (d.config ? d.config.cmd : '');
+    sdrCmd = d.config ? d.config.cmd : '';
+    st.textContent = 'LIVE — ' + sdrCmd;
+    sdrView(mode === 'analyze' ? 'analyzer' : 'table');   // show the right view
+    sdrLines = 0; sdrEvents = 0;
     if (sdrTimer) clearInterval(sdrTimer);
     sdrTimer = setInterval(sdrPoll, 500);
 }
@@ -4375,13 +4381,19 @@ async function sdrPoll() {
         for (const e of d.events) {
             sdrSince = e.seq;
             sdrRawBuf.push(e.line);
+            sdrLines++;
             const ev = e.event;
             if (ev) {
                 sdrUpdateRssi(ev);
-                if (!ev.analyzer) sdrAddRow(ev);
+                if (!ev.analyzer) { sdrAddRow(ev); sdrEvents++; }
             } else {
                 sdrAnBuf.push(e.line);
             }
+        }
+        if (d.live) {
+            const st = document.getElementById('sdr-state');
+            st.textContent = 'LIVE · rx ' + sdrLines + ' lines · ' + sdrEvents + ' decoded';
+            st.title = sdrCmd;
         }
         if (sdrRawBuf.length > 400) sdrRawBuf = sdrRawBuf.slice(-400);
         if (sdrAnBuf.length > 400) sdrAnBuf = sdrAnBuf.slice(-400);
