@@ -3755,6 +3755,8 @@ _UI_HTML = """\
         .sdr-tabs button { background: #0f1a30; color: #cfe; border: 1px solid #0f3460; }
         .sdr-tabs button.active { background: #0f3460; color: #fff; }
         .sdr-section button.preset { background: #2980b9; }
+        .sdr-section button.sherlock { background: #8e44ad; }
+        .sdr-section button.sherlock.recording { background: #dc3545; }
         .sdr-view { margin-top: 10px; }
         .sdr-table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
         .sdr-table th, .sdr-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #0f3460; color: #cfe; white-space: nowrap; }
@@ -3827,8 +3829,9 @@ _UI_HTML = """\
                 <label>Presets</label>
                 <button type="button" class="preset" onclick="sdrPreset('analyze433')">Analyze 433 (AGC)</button>
                 <button type="button" class="preset" onclick="sdrPreset('decode433')">Decode 433 (AGC)</button>
-                <button type="button" class="preset" onclick="sdrPreset('flex433')">Flex remote 433</button>
                 <button type="button" class="preset" onclick="sdrPreset('scanall')">Scan all bands</button>
+                <button type="button" class="sherlock" id="sdr-sherlock" onclick="sdrSherlock(this)">&#128269; AI Sherlock</button>
+                <span id="sdr-log-state" style="color:#e0e0e0"></span>
             </div>
             <div class="siggen-row">
                 <span class="fld"><label>Bands</label>
@@ -3871,13 +3874,6 @@ _UI_HTML = """\
                     <span style="color:#8ab;font-size:0.8em">(click to copy)</span></span>
                 <div id="sdr-codes" style="display:flex;gap:6px;flex-wrap:wrap"></div>
                 <button type="button" onclick="sdrCodeCounts.clear();sdrRenderCodes()">Clear</button>
-            </div>
-            <div class="siggen-row">
-                <span class="fld"><label>Record</label>
-                    <span style="color:#8ab;font-size:0.8em">(log key presses for AI pattern analysis)</span></span>
-                <button type="button" class="preset" onclick="sdrLogStart()">&#9679; Start Log</button>
-                <button type="button" class="stop" onclick="sdrLogStop()">Stop &amp; Analyze</button>
-                <span id="sdr-log-state" style="color:#e0e0e0"></span>
             </div>
             <div id="sdr-state" class="siggen-state">idle</div>
             <div class="siggen-row sdr-tabs" style="gap:6px">
@@ -4382,8 +4378,6 @@ function sdrRenderCodes() {
 const SDR_PRESETS = {
     analyze433: { bands: ['433920000'], mode: 'analyze', agc: true },
     decode433:  { bands: ['433920000'], mode: 'decode', agc: true },
-    flex433:    { bands: ['433920000'], mode: 'flex', agc: true,
-                  flex: 'n=rmt,m=OOK_PWM,s=416,l=2150,r=16000' },
     scanall:    { bands: ['433920000', '315000000', '868300000'], mode: 'decode', agc: true }
 };
 function sdrPreset(name) {
@@ -4478,21 +4472,28 @@ async function sdrLiveStop() {
     try { await fetch('/api/sdr/live/stop', { method: 'POST' }); } catch (e) { /* */ }
     document.getElementById('sdr-state').textContent = 'idle';
 }
-async function sdrLogStart() {
-    // ensure a stream is running (analyze + AGC) so there's pulse data to log
-    if (!sdrTimer) {
+let sdrLogging = false;
+async function sdrSherlock(btn) {
+    const st = document.getElementById('sdr-log-state');
+    if (!sdrLogging) {
+        // AI Sherlock always records in analyze + AGC (the settings the
+        // reverse-engineering step needs), then logs the key presses.
         document.getElementById('sdr-mode').value = 'analyze'; sdrModeChange();
         document.getElementById('sdr-agc').checked = true; sdrToggleAgc(false);
         await sdrLiveStart();
+        try { await fetch('/api/sdr/log/start', { method: 'POST' }); } catch (e) { /* */ }
+        sdrLogging = true;
+        btn.innerHTML = '\\u25cf Stop &amp; Analyze';
+        btn.classList.add('recording');
+        st.textContent = 'recording — press each key a few times, then Stop';
+    } else {
+        let d = {};
+        try { d = await (await fetch('/api/sdr/log/stop', { method: 'POST' })).json(); } catch (e) { /* */ }
+        sdrLogging = false;
+        btn.innerHTML = '\\ud83d\\udd0d AI Sherlock';
+        btn.classList.remove('recording');
+        st.textContent = 'recorded ' + (d.count || 0) + ' lines — ask Claude to analyze the log';
     }
-    try { await fetch('/api/sdr/log/start', { method: 'POST' }); } catch (e) { /* */ }
-    document.getElementById('sdr-log-state').textContent = '\\u25cf recording — press your keys, then Stop';
-}
-async function sdrLogStop() {
-    let d = {};
-    try { d = await (await fetch('/api/sdr/log/stop', { method: 'POST' })).json(); } catch (e) { /* */ }
-    document.getElementById('sdr-log-state').textContent =
-        'recorded ' + (d.count || 0) + ' lines — ask Claude to analyze the log';
 }
 async function sdrReset() {
     if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
