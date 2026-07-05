@@ -140,6 +140,12 @@ else
     echo "SDR receiver config already exists, skipping..."
 fi
 
+# rtl_433 flex-decoder database (auto-loaded from /etc/rtl_433/rtl_433.conf):
+# devices reverse-engineered on the workbench (e.g. Euromot Awning remote).
+echo "Installing rtl_433 device database..."
+mkdir -p /etc/rtl_433
+cp "$SCRIPT_DIR/config/rtl_433.conf" /etc/rtl_433/rtl_433.conf
+
 # Mosquitto test broker config
 if [ "$UPDATE_ONLY" = false ]; then
     echo "Installing MQTT broker config..."
