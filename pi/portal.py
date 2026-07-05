@@ -3736,6 +3736,7 @@ _UI_HTML = """\
             box-shadow: 0 0 4px #000; left: 0; transition: left 0.25s; }
         .sdr-tabs button { background: #0f1a30; color: #cfe; border: 1px solid #0f3460; }
         .sdr-tabs button.active { background: #0f3460; color: #fff; }
+        .sdr-section button.preset { background: #2980b9; }
         .sdr-view { margin-top: 10px; }
         .sdr-table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
         .sdr-table th, .sdr-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #0f3460; color: #cfe; white-space: nowrap; }
@@ -3800,6 +3801,13 @@ _UI_HTML = """\
     <div class="sdr-section" id="sdr-section">
         <h2>SDR Console (rtl_433)</h2>
         <div class="siggen-box">
+            <div class="siggen-row">
+                <label>Presets</label>
+                <button type="button" class="preset" onclick="sdrPreset('analyze433')">Analyze 433 (AGC)</button>
+                <button type="button" class="preset" onclick="sdrPreset('decode433')">Decode 433 (AGC)</button>
+                <button type="button" class="preset" onclick="sdrPreset('flex433')">Flex remote 433</button>
+                <button type="button" class="preset" onclick="sdrPreset('scanall')">Scan all bands</button>
+            </div>
             <div class="siggen-row">
                 <span class="fld"><label>Bands</label>
                     <label class="chk"><input type="checkbox" class="sdr-band" value="433920000" checked> 433.92</label>
@@ -4282,6 +4290,25 @@ setInterval(fetchLog, 1500);   // snappier activity log for live operator prompt
 let sdrSince = 0, sdrTimer = null, sdrRawBuf = [], sdrAnBuf = [];
 let sdrLines = 0, sdrEvents = 0, sdrCmd = '';
 
+const SDR_PRESETS = {
+    analyze433: { bands: ['433920000'], mode: 'analyze', agc: true },
+    decode433:  { bands: ['433920000'], mode: 'decode', agc: true },
+    flex433:    { bands: ['433920000'], mode: 'flex', agc: true,
+                  flex: 'n=rmt,m=OOK_PWM,s=416,l=2150,r=16000' },
+    scanall:    { bands: ['433920000', '315000000', '868300000'], mode: 'decode', agc: true }
+};
+function sdrPreset(name) {
+    const p = SDR_PRESETS[name];
+    if (!p) return;
+    document.querySelectorAll('.sdr-band').forEach(b => { b.checked = p.bands.includes(b.value); });
+    document.getElementById('sdr-mode').value = p.mode;
+    sdrModeChange();
+    document.getElementById('sdr-agc').checked = !!p.agc;
+    sdrToggleAgc();
+    if (p.flex) document.getElementById('sdr-flex').value = p.flex;
+    if (p.gain !== undefined) document.getElementById('sdr-gain').value = p.gain;
+    sdrLiveStart();
+}
 function sdrToggleAgc() {
     const agc = document.getElementById('sdr-agc').checked;
     document.getElementById('sdr-gain').disabled = agc;
