@@ -40,6 +40,7 @@
     "runArgs": ["--name", "universal-embedded-workbench"],
     "appPort": ["2222:2222"],
     "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && (git clone https://github.com/SensorsIot/claude.git ~/.claude 2>/dev/null || (cd ~/.claude && git pull)) && cp -f ~/.claude/tmux.conf ~/.tmux.conf && mkdir -p ~/.claude-data/projects && ln -sf ~/.claude-data/.credentials.json ~/.claude/.credentials.json && ln -sf ~/.claude-data/history.jsonl ~/.claude/history.jsonl && rm -rf ~/.claude/projects && ln -sf ~/.claude-data/projects ~/.claude/projects && ln -sf ~/.claude-data/.claude.json ~/.claude.json && mkdir -p ~/.npm-global && npm config set prefix ~/.npm-global && npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && pip install -r requirements-dev.txt 2>/dev/null || pip install pyserial",
+    "postStartCommand": "sudo sh -c 'mkdir -p /home/dev/.claude-data/hostkeys && if ls /home/dev/.claude-data/hostkeys/ssh_host_*_key >/dev/null 2>&1; then cp -a /home/dev/.claude-data/hostkeys/ssh_host_* /etc/ssh/; else cp -a /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub /home/dev/.claude-data/hostkeys/; fi && chmod 600 /etc/ssh/ssh_host_*_key && chmod 644 /etc/ssh/ssh_host_*_key.pub && /etc/init.d/ssh restart'",
     "remoteUser": "dev",
     "mounts": [
         "source=${localEnv:HOME}/.ssh/authorized_keys,target=/home/dev/.ssh/authorized_keys,type=bind,readonly",
