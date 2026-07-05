@@ -528,6 +528,71 @@ class TestSdr:
 
 
 # =====================================================================
+# WT-19xx  RF Path (DUT transmit -> SDR receive)
+# =====================================================================
+
+
+@pytest.mark.requires_dut
+class TestRfPath:
+    """WT-1908: verify the awning's OOK transmission is received by the SDR.
+
+    Uses the flex decoder tuned to the awning timing plus rssi/snr levels to
+    separate signal from noise: a transmit window (boot-home UP burst on reset)
+    must show more/stronger OOK-PWM packages than a quiet baseline. Needs the
+    awning on SLOT3 and adequate RF isolation — close-range saturation garbles
+    the exact codeword, so this gates on signal strength, not decoded bits.
+    """
+
+    SLOT = "SLOT3"
+    FLEX = "n=awn,m=OOK_PWM,s=416,l=2150,r=16000"
+
+    def _capture(self, workbench, reset):
+        box = {}
+
+        def run():
+            box["r"] = workbench.sdr_capture(
+                freq_hz=433_920_000, duration_s=8, flex=self.FLEX)
+        t = threading.Thread(target=run)
+        t.start()
+        for _ in range(25):
+            try:
+                if workbench.sdr_status().get("active"):
+                    break
+            except WorkbenchError:
+                pass
+            time.sleep(0.2)
+        if reset:
+            time.sleep(0.6)
+            workbench.serial_reset(slot=self.SLOT)  # boot-home UP burst
+        t.join()
+        r = box.get("r", {})
+        return r.get("strong", 0), (r.get("max_snr") or -999)
+
+    def test_wt1908_transmit_window_exceeds_baseline(self, workbench):
+        """WT-1908: DUT-transmit window has stronger RF than a quiet baseline."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        # Precondition: the receiver must actually see RF. If the band is dead
+        # (antenna/dongle issue), the test is not meaningful — skip, don't fail.
+        ambient = workbench.sdr_analyze(freq_hz=433_920_000, duration_s=4)
+        if "Detected OOK" not in ambient.get("analyzer", "") and \
+                len(ambient.get("analyzer", "")) < 1000:
+            pytest.skip("SDR receiving no RF (check antenna/dongle) — "
+                        "RF-path test needs a live receive path")
+
+        # Settle to idle (past the 40 s boot-home), baseline, then active.
+        workbench.serial_reset(slot=self.SLOT)
+        time.sleep(45)
+        base_strong, base_snr = self._capture(workbench, reset=False)
+        time.sleep(3)
+        act_strong, act_snr = self._capture(workbench, reset=True)
+
+        assert act_strong > base_strong or act_snr > base_snr + 3, (
+            f"no RF-path discrimination: active(strong={act_strong},"
+            f"snr={act_snr}) vs baseline(strong={base_strong},snr={base_snr})")
+
+
+# =====================================================================
 # WT-20xx  MQTT Broker
 # =====================================================================
 
