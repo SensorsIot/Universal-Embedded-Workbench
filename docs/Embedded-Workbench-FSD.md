@@ -2407,7 +2407,10 @@ suggestion only on a clean read), or stops with `too_strong` when the front end
 saturates into FSK at every gain; **decode** extracts the repeating codeword with
 a custom flex decoder; **classify** then checks the built-in decoders. The
 `tools/sdr_acquire.py` CLI drives these phases interactively with live operator
-prompts — the operator, not a remote caller, times the transmissions.
+prompts — the operator, not a remote caller, times the transmissions. `acquire`
+also streams each phase prompt into the portal activity log as it runs (START →
+carrier → gain → decoded → DONE), so an operator watching the workbench web UI
+sees the live instructions without a terminal.
 
 Parameters for `capture`:
 

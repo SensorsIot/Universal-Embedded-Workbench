@@ -3425,7 +3425,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 dwell_s=int(body.get("dwell_s", 3)),
                 decode_s=int(body.get("decode_s", 12)),
                 flex=body.get("flex"),
-                wait_s=int(body.get("wait_s", 30)))
+                wait_s=int(body.get("wait_s", 30)),
+                progress=log_activity)
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         log_activity(
@@ -4140,6 +4141,7 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 5000);
+setInterval(fetchLog, 1500);   // snappier activity log for live operator prompts
 </script>
 </body>
 </html>

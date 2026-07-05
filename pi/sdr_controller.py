@@ -32,7 +32,7 @@ import re
 import shutil
 import subprocess
 import threading
-from typing import Any
+from typing import Any, Callable
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -262,7 +262,9 @@ class SdrReceiver:
     def acquire(self, freq_hz: int | None = None, span_hz: int = 500_000,
                 bin_hz: int = 10_000, gains: list[float] | None = None,
                 dwell_s: int = 3, decode_s: int = 12,
-                flex: str | None = None, wait_s: int = 30) -> dict[str, Any]:
+                flex: str | None = None, wait_s: int = 30,
+                progress: Callable[[str, str], None] | None = None
+                ) -> dict[str, Any]:
         """Phased receive: locate → level → decode → classify.
 
         A single guided acquisition that keeps a strong near-field source from
@@ -284,11 +286,19 @@ class SdrReceiver:
 
         Keep the transmitter keyed while it runs; ``locate`` waits for the first
         press, then the level/decode phases need it kept active.
+
+        ``progress(msg, cat)`` is called at each phase boundary so a caller can
+        surface live operator prompts (e.g. into the portal activity log) while
+        the run is still in flight — the operator watches the workbench UI
+        instead of a buffered terminal.
         """
         freq_hz = int(freq_hz or self._config["default_freq_hz"])
+        emit = progress or (lambda _msg, _cat: None)
         report: dict[str, Any] = {"requested_freq_hz": freq_hz, "phases": {}}
 
         # Phase 1 — locate (poll until the carrier appears) ---------------
+        emit(f"SDR acquire ▶ START THE SIGNAL — press/hold the transmitter "
+             f"(~{freq_hz / 1e6:.2f} MHz)", "step")
         margin = None
         located = False
         carrier = None
@@ -311,9 +321,13 @@ class SdrReceiver:
             report["summary"] = (
                 "No carrier found — the strongest bin is not clear of the "
                 "noise floor. Is the transmitter keyed and in range?")
+            emit("SDR ✗ no carrier — is the transmitter keyed?", "error")
             return report
+        emit(f"SDR ✓ carrier @ {carrier / 1e6:.4f} MHz "
+             f"({margin:.0f} dB over noise) — keep the signal ON", "ok")
 
         # Phase 2 — level -------------------------------------------------
+        emit("SDR ▶ finding the right gain — keep pressing…", "step")
         steps = gains if gains is not None else list(self._GAIN_STEPS)
         sweep: list[dict[str, Any]] = []
         suggested: dict[float, str] = {}
@@ -340,6 +354,8 @@ class SdrReceiver:
             report["summary"] = (
                 "Power scan saw a carrier but no pulses demodulated at any "
                 "gain — likely a continuous/unmodulated carrier or interference.")
+            emit("SDR ✗ carrier seen but no pulses — unmodulated / interference",
+                 "error")
             return report
         if not clean:
             report["phases"]["level"] = {
@@ -350,6 +366,8 @@ class SdrReceiver:
                 "a clean OOK codeword (the saturated front end reads it as FSK). "
                 "Increase distance from the antenna or add an attenuator; if the "
                 "source is genuinely FSK, pass an explicit flex spec.")
+            emit("SDR ✗ TOO STRONG — move the transmitter back or attenuate",
+                 "error")
             return report
         # Proper attenuation = the LOWEST gain that still reads clean: it clears
         # the noise floor without pushing the front end toward saturation.
@@ -362,6 +380,8 @@ class SdrReceiver:
             "too_strong": False,
             "warning": ("higher gains saturate into FSK — keep the source at "
                         "distance / attenuated") if edge else None}
+        emit(f"SDR ✓ gain {chosen_gain} dB (clean OOK) — decoding, keep pressing…",
+             "ok")
 
         # Phase 3 — decode (custom, not built-in) -------------------------
         # Retry: a bounded capture can land between presses, so try a few
@@ -382,7 +402,10 @@ class SdrReceiver:
             report["summary"] = (
                 f"Carrier {carrier} Hz, leveled at gain {chosen_gain} dB, but no "
                 f"stable codeword decoded with flex '{used_flex}'.")
+            emit("SDR ✗ no stable codeword decoded", "error")
             return report
+        top = ", ".join(w["code"] for w in words[:4])
+        emit(f"SDR ✓ decoded: {top}", "ok")
 
         # Phase 4 — classify against built-in decoders --------------------
         builtin = self.capture(carrier, duration_s=decode_s, gain=chosen_gain)
@@ -392,12 +415,12 @@ class SdrReceiver:
             "builtin_models": models, "matched": bool(models),
             "packets": builtin.get("count")}
         report["ok_phase"] = "complete"
-        top = ", ".join(w["code"] for w in words[:4])
         report["summary"] = (
             f"Carrier {carrier} Hz @ gain {chosen_gain} dB; decoded "
             f"{len(words)} codeword(s): {top}. "
             + (f"Built-in decoder match: {', '.join(models)}." if models
                else "No built-in decoder matches — custom signal."))
+        emit("SDR ✓ DONE — " + report["summary"], "ok")
         return report
 
     # ── acquisition helpers ──────────────────────────────────────────
