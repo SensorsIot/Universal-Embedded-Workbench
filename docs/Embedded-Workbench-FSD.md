@@ -2427,7 +2427,10 @@ fast-polls via `GET /api/sdr/live?since=<seq>` (~500 ms; no events dropped — t
 poll cadence only affects latency). The console displays a parsed event table
 (time/freq/RSSI/SNR/mod/model/data), a burst-driven RSSI meter (green mid-band,
 red too-strong/too-weak rails — meaningful only at fixed gain, since AGC pins
-RSSI near full scale), an analyzer view, and a raw toggle. Any control change is
+RSSI near full scale), an analyzer view, a raw toggle, and a de-duplicated
+"Codes seen" row of click-to-copy chips (collected from both flex `rows`/`codes`
+and analyze-mode `codes:` lines, filtered to ≥8-bit codewords; copy uses an
+execCommand fallback since the clipboard API is blocked on the plain-HTTP LAN). Any control change is
 applied by a fast rtl_433 relaunch. The live session holds the single-dongle
 lock for its lifetime, so the one-shot capture/analyze/power/acquire endpoints
 report "SDR busy" until it is stopped with `POST /api/sdr/live/stop`.

@@ -3747,6 +3747,10 @@ _UI_HTML = """\
             font-size: 0.78em; color: #9fb; max-height: 300px; overflow: auto; white-space: pre-wrap; }
         .sdr-strong { color: #e74c3c; font-weight: bold; }
         .sdr-weak { color: #f1c40f; }
+        .codechip { background: #0f3460; color: #2ecc71; font-family: monospace;
+            padding: 3px 9px; border-radius: 6px; cursor: pointer; font-size: 0.9em; user-select: all; }
+        .codechip:hover { background: #1b4b7a; }
+        .codechip.copied { background: #2ecc71; color: #03260f; }
     </style>
 </head>
 <body>
@@ -3829,9 +3833,10 @@ _UI_HTML = """\
                 <span class="fld"><label>Gain</label>
                     <label class="chk"><input type="checkbox" id="sdr-agc" checked onchange="sdrToggleAgc()"> AGC</label></span>
                 <input type="range" id="sdr-gain" min="0" max="49.6" step="0.1" value="25" disabled
-                    oninput="document.getElementById('sdr-gain-val').textContent=this.value+' dB'">
+                    oninput="document.getElementById('sdr-gain-val').textContent=this.value+' dB'"
+                    onchange="sdrLiveApply()">
                 <span id="sdr-gain-val" style="min-width:56px;color:#e0e0e0">auto</span>
-                <label class="chk"><input type="checkbox" id="sdr-squelch"> squelch</label>
+                <label class="chk"><input type="checkbox" id="sdr-squelch" onchange="sdrLiveApply()"> squelch</label>
             </div>
             <div class="siggen-row" id="sdr-flex-row" style="display:none">
                 <label>Flex&nbsp;-X</label>
@@ -3842,6 +3847,12 @@ _UI_HTML = """\
                 <label>RSSI</label>
                 <div class="rssi-meter"><div class="rssi-marker" id="sdr-rssi-marker"></div></div>
                 <span id="sdr-rssi-val" style="min-width:150px;color:#e0e0e0">&mdash;</span>
+            </div>
+            <div class="siggen-row">
+                <span class="fld"><label>Codes seen</label>
+                    <span style="color:#8ab;font-size:0.8em">(click to copy)</span></span>
+                <div id="sdr-codes" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+                <button type="button" onclick="sdrCodes.clear();sdrRenderCodes()">Clear</button>
             </div>
             <div id="sdr-state" class="siggen-state">idle</div>
             <div class="siggen-row sdr-tabs" style="gap:6px">
@@ -4289,6 +4300,55 @@ setInterval(fetchLog, 1500);   // snappier activity log for live operator prompt
 // ── SDR Console ──────────────────────────────────────────────────────
 let sdrSince = 0, sdrTimer = null, sdrRawBuf = [], sdrAnBuf = [];
 let sdrLines = 0, sdrEvents = 0, sdrCmd = '';
+let sdrCodes = new Set();
+let sdrRssiAge = 99;
+
+function sdrLiveApply() { if (sdrTimer) sdrLiveStart(); }   // relaunch if running
+function sdrRssiIdle() {
+    const el = document.getElementById('sdr-rssi-val');
+    el.textContent = '— (no signal)'; el.className = '';
+    document.getElementById('sdr-rssi-marker').style.opacity = '0.2';
+}
+
+function sdrCopyText(text, el) {   // clipboard API is blocked on plain-HTTP LAN
+    let ok = false;
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        ok = document.execCommand('copy'); document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+    if (!ok && navigator.clipboard) { try { navigator.clipboard.writeText(text); ok = true; } catch (e) { /* */ } }
+    if (el) { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 800); }
+}
+function sdrCollectCodes(e) {
+    const found = [];
+    const ev = e.event;
+    if (ev) {
+        for (const c of ev.codes || []) found.push('' + c);
+        for (const r of ev.rows || []) if (r.data && r.len) found.push('{' + r.len + '}' + r.data);
+    }
+    const m = e.line.match(/codes\\s*:\\s*(.+)/);   // analyze-mode "codes : {18}7f480, ..."
+    if (m) for (const t of (m[1].match(/\\{\\d+\\}[0-9a-fA-F]+/g) || [])) found.push(t);
+    let added = false;
+    for (const code of found) {
+        const bm = code.match(/^\\{(\\d+)\\}/);
+        if (bm && parseInt(bm[1]) >= 8 && !sdrCodes.has(code)) { sdrCodes.add(code); added = true; }
+    }
+    return added;
+}
+function sdrRenderCodes() {
+    const box = document.getElementById('sdr-codes');
+    box.innerHTML = '';
+    for (const code of sdrCodes) {
+        const chip = document.createElement('span');
+        chip.className = 'codechip';
+        chip.textContent = code;
+        chip.title = 'click to copy';
+        chip.onclick = () => sdrCopyText(code, chip);
+        box.appendChild(chip);
+    }
+}
 
 const SDR_PRESETS = {
     analyze433: { bands: ['433920000'], mode: 'analyze', agc: true },
@@ -4304,16 +4364,17 @@ function sdrPreset(name) {
     document.getElementById('sdr-mode').value = p.mode;
     sdrModeChange();
     document.getElementById('sdr-agc').checked = !!p.agc;
-    sdrToggleAgc();
+    sdrToggleAgc(false);
     if (p.flex) document.getElementById('sdr-flex').value = p.flex;
     if (p.gain !== undefined) document.getElementById('sdr-gain').value = p.gain;
     sdrLiveStart();
 }
-function sdrToggleAgc() {
+function sdrToggleAgc(apply) {
     const agc = document.getElementById('sdr-agc').checked;
     document.getElementById('sdr-gain').disabled = agc;
     document.getElementById('sdr-gain-val').textContent =
         agc ? 'auto' : document.getElementById('sdr-gain').value + ' dB';
+    if (apply !== false) sdrLiveApply();
 }
 function sdrModeChange() {
     const m = document.getElementById('sdr-mode').value;
@@ -4329,7 +4390,9 @@ function sdrUpdateRssi(ev) {
     const r = ev.rssi;
     if (r === undefined || r === null) return;
     const pos = Math.max(0, Math.min(1, (r + 40) / 40)) * 100;
-    document.getElementById('sdr-rssi-marker').style.left = pos + '%';
+    const marker = document.getElementById('sdr-rssi-marker');
+    marker.style.left = pos + '%'; marker.style.opacity = '1';
+    sdrRssiAge = 0;
     let txt = r.toFixed(1) + ' dB';
     if (ev.snr !== undefined && ev.snr !== null) txt += '  SNR ' + ev.snr.toFixed(0);
     const el = document.getElementById('sdr-rssi-val');
@@ -4377,7 +4440,7 @@ async function sdrLiveStart() {
     sdrCmd = d.config ? d.config.cmd : '';
     st.textContent = 'LIVE — ' + sdrCmd;
     sdrView(mode === 'analyze' ? 'analyzer' : 'table');   // show the right view
-    sdrLines = 0; sdrEvents = 0;
+    sdrLines = 0; sdrEvents = 0; sdrCodes.clear(); sdrRenderCodes();
     if (sdrTimer) clearInterval(sdrTimer);
     sdrTimer = setInterval(sdrPoll, 500);
 }
@@ -4405,10 +4468,12 @@ async function sdrPoll() {
             clearInterval(sdrTimer); sdrTimer = null;
             document.getElementById('sdr-state').textContent = 'stopped (rtl_433 exited)';
         }
+        let newCode = false;
         for (const e of d.events) {
             sdrSince = e.seq;
             sdrRawBuf.push(e.line);
             sdrLines++;
+            if (sdrCollectCodes(e)) newCode = true;
             const ev = e.event;
             if (ev) {
                 sdrUpdateRssi(ev);
@@ -4417,6 +4482,11 @@ async function sdrPoll() {
                 sdrAnBuf.push(e.line);
             }
         }
+        if (newCode) sdrRenderCodes();
+        // RSSI is burst-driven: if no burst reported for ~2.5s, show "no signal"
+        // instead of freezing on the last value.
+        sdrRssiAge++;
+        if (sdrRssiAge >= 5) sdrRssiIdle();
         if (d.live) {
             const st = document.getElementById('sdr-state');
             st.textContent = 'LIVE · rx ' + sdrLines + ' lines · ' + sdrEvents + ' decoded';
