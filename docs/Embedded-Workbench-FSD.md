@@ -2380,16 +2380,18 @@ terminates an active capture early.
 | Method | Endpoint | Body / Query | Description |
 |--------|----------|--------------|-------------|
 | GET | /api/sdr/status | — | Tool/dongle detection + active-capture state |
-| POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?, flex?}` | Decode RF for a window; returns decoded records + signal levels |
-| POST | /api/sdr/analyze | `{freq_hz?, duration_s?}` | Pulse-analyzer capture for recapturing a remote |
-| POST | /api/sdr/power | `{freq_hz?, duration_s?, span_hz?, bin_hz?}` | Narrowband RF power (rtl_power) → `{peak_db, mean_db}` |
+| POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?, flex?, gain?}` | Decode RF for a window; returns decoded records + signal levels |
+| POST | /api/sdr/analyze | `{freq_hz?, duration_s?, gain?}` | Pulse-analyzer capture for recapturing a remote |
+| POST | /api/sdr/power | `{freq_hz?, duration_s?, span_hz?, bin_hz?}` | Narrowband RF power (rtl_power) → `{peak_db, peak_freq_hz, mean_db}` |
 | POST | /api/sdr/stop | — | Terminate an in-progress capture |
 
 `POST /api/sdr/power` runs `rtl_power` over a small span centred on `freq_hz`
 and returns the peak/mean power (dB). Unlike decode-based detection, a raw
 carrier lifts `peak_db` clear of broadband band noise — the robust way to
-confirm a transmitter is emitting (WT-1908). Centre the span off the target
-frequency so the carrier does not sit on the dongle's DC spike.
+confirm a transmitter is emitting (WT-1908). `peak_freq_hz` reports the centre
+frequency of the strongest bin, locating a carrier of unknown frequency across
+a wide sweep. Centre the span off the target frequency so the carrier does not
+sit on the dongle's DC spike.
 
 Parameters for `capture`:
 
@@ -2403,6 +2405,12 @@ Parameters for `capture`:
   `"n=awn,m=OOK_PWM,s=416,l=2150,r=16000"`) to decode a custom protocol.
   This is the recapture/verify path — it cuts through band noise the generic
   analyzer can't resolve.
+- `gain` (number|`"auto"`, optional) — fixed tuner gain in dB. Omitted leaves
+  the driver default (auto-AGC). A fixed gain avoids front-end saturation from
+  a near-field transmitter: with AGC a strong close source rails the input to
+  full scale, filling an OOK signal's off-gaps so it demodulates as a
+  continuous/misdetected-FSK carrier and slices to all-zero codewords. `analyze`
+  takes the same `gain` parameter.
 
 Captures run `rtl_433 -M level`, so each decoded record carries `rssi`,
 `snr`, and `noise` (dB). The `decode` response is

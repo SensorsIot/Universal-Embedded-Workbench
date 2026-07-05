@@ -120,16 +120,29 @@ class SdrReceiver:
 
     # ── public API ───────────────────────────────────────────────────
 
+    def _gain_args(self, gain: float | str | None) -> list[str]:
+        """rtl_433 ``-g`` args. A fixed tuner gain (dB) disables the tuner's
+        auto-AGC, which otherwise rails a strong near-field transmitter to
+        full scale and mangles the modulation. Pass ``"auto"`` (or ``None``)
+        to leave the driver default; a number sets a fixed gain in dB."""
+        if gain is None:
+            return []
+        if isinstance(gain, str) and gain.strip().lower() == "auto":
+            return ["-g", "auto"]
+        return ["-g", str(gain)]
+
     def capture(self, freq_hz: int | None = None, duration_s: int | None = None,
                 protocols: list[int] | None = None,
                 sample_rate: int | None = None,
-                flex: str | None = None) -> dict[str, Any]:
+                flex: str | None = None,
+                gain: float | str | None = None) -> dict[str, Any]:
         """Decode RF for a bounded window; return decoded rtl_433 records.
 
         ``flex`` passes an rtl_433 ``-X`` flex-decoder spec (e.g.
         ``"n=awn,m=OOK_PWM,s=416,l=2150,r=16000"``) to decode a custom
         protocol — the recapture/verify use case — cutting through band noise
-        that the generic analyzer can't resolve.
+        that the generic analyzer can't resolve.  ``gain`` sets a fixed tuner
+        gain in dB to avoid front-end saturation on a near-field source.
         """
         freq_hz = int(freq_hz or self._config["default_freq_hz"])
         duration_s = self._clamp_duration(duration_s)
@@ -140,6 +153,7 @@ class SdrReceiver:
                "-s", str(int(sample_rate or self._config["default_sample_rate"])),
                "-F", "json", "-M", "time:iso", "-M", "level",
                "-T", str(duration_s)]
+        cmd += self._gain_args(gain)
         for proto in protocols or []:
             cmd += ["-R", str(int(proto))]
         if flex:
@@ -169,12 +183,19 @@ class SdrReceiver:
                 "snr_gate_db": snr_gate, "strong": strong}
 
     def analyze(self, freq_hz: int | None = None,
-                duration_s: int | None = None) -> dict[str, Any]:
-        """Pulse-analyzer capture (rtl_433 -A) for recapturing a remote."""
+                duration_s: int | None = None,
+                gain: float | str | None = None) -> dict[str, Any]:
+        """Pulse-analyzer capture (rtl_433 -A) for recapturing a remote.
+
+        ``gain`` sets a fixed tuner gain in dB; drop it to keep a strong
+        near-field source from saturating the front end (which the analyzer
+        reads as garbled multi-hundred-ms pulses / misdetected FSK).
+        """
         freq_hz = int(freq_hz or self._config["default_freq_hz"])
         duration_s = self._clamp_duration(duration_s)
         cmd = [self._config["rtl_433_bin"], "-f", str(freq_hz),
                "-A", "-T", str(duration_s)]
+        cmd += self._gain_args(gain)
         stdout, stderr = self._run(cmd, duration_s, mode="analyze",
                                    freq_hz=freq_hz)
         analyzer = _ANSI_RE.sub("", (stdout + stderr)).strip()
@@ -197,17 +218,32 @@ class SdrReceiver:
                "-i", str(duration_s), "-1", "-"]
         stdout, _ = self._run(cmd, duration_s, mode="power", freq_hz=freq_hz)
         dbs: list[float] = []
+        peak_db: float | None = None
+        peak_freq: int | None = None
         for line in stdout.splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 7:
                 continue
-            for v in parts[6:]:          # columns 0-5 are metadata, rest are dB
+            # Each row covers one hop tile: cols 2/4 are its low edge and bin
+            # step, cols 6+ are the per-bin dB. Recover each bin's centre freq
+            # so the strongest bin can be reported — that's what locates a
+            # carrier of unknown frequency across a wide sweep.
+            try:
+                f_low = float(parts[2])
+                f_step = float(parts[4])
+            except ValueError:
+                continue
+            for i, v in enumerate(parts[6:]):   # cols 0-5 metadata, rest are dB
                 try:
-                    dbs.append(float(v))
+                    db = float(v)
                 except ValueError:
-                    pass
+                    continue
+                dbs.append(db)
+                if peak_db is None or db > peak_db:
+                    peak_db = db
+                    peak_freq = int(f_low + i * f_step)
         return {"freq_hz": freq_hz, "duration_s": duration_s,
-                "peak_db": max(dbs) if dbs else None,
+                "peak_db": peak_db, "peak_freq_hz": peak_freq,
                 "mean_db": (sum(dbs) / len(dbs)) if dbs else None,
                 "bins": len(dbs)}
 

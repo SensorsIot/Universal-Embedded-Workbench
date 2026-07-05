@@ -3374,7 +3374,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 duration_s=body.get("duration_s"),
                 protocols=body.get("protocols"),
                 sample_rate=body.get("sample_rate"),
-                flex=body.get("flex"))
+                flex=body.get("flex"),
+                gain=body.get("gain"))
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         log_activity(
@@ -3389,7 +3390,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             result = _sdr.analyze(
                 freq_hz=body.get("freq_hz"),
-                duration_s=body.get("duration_s"))
+                duration_s=body.get("duration_s"),
+                gain=body.get("gain"))
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         self._send_json({"ok": True, **result})
