@@ -875,6 +875,7 @@ serial-interface mode.
 | GET | /api/sdr/live/status | Live console running state + config (FR-028) |
 | POST | /api/sdr/live/start | Start the persistent rtl_433 live console (FR-028) |
 | POST | /api/sdr/live/stop | Stop the live console, release the dongle (FR-028) |
+| POST | /api/sdr/reset | USB-reset a wedged dongle (operator recovery) (FR-028) |
 | POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
 | **MQTT Broker** | | |
 | GET | /api/mqtt/status | Broker running state + port (FR-029) |
@@ -2430,6 +2431,14 @@ RSSI near full scale), an analyzer view, and a raw toggle. Any control change is
 applied by a fast rtl_433 relaunch. The live session holds the single-dongle
 lock for its lifetime, so the one-shot capture/analyze/power/acquire endpoints
 report "SDR busy" until it is stopped with `POST /api/sdr/live/stop`.
+
+**Dongle recovery.** Heavy use can wedge the RTL-SDR into a state where it still
+enumerates but fails at the streaming step (`rtl_433` exits 3 right after
+allocating buffers). `POST /api/sdr/reset` issues a `USBDEVFS_RESET` to the
+device (located via sysfs vendor/product `0bda:2838`/`2832`) and re-probes —
+operator recovery from the web UI with no SSH or physical replug. `start_live`
+also self-heals: if rtl_433 exits within ~1.4 s of launch it USB-resets the
+dongle and retries once before surfacing a "check USB/power or replug" error.
 
 Parameters for `capture`:
 

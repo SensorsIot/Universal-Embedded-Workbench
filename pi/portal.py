@@ -1836,6 +1836,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_live_start()
         elif path == "/api/sdr/live/stop":
             self._handle_sdr_live_stop()
+        elif path == "/api/sdr/reset":
+            self._handle_sdr_reset()
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
         elif path == "/api/mqtt/start":
@@ -3408,6 +3410,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._sdr_unavailable()
         self._send_json({"ok": True, **_sdr.live_status()})
 
+    def _handle_sdr_reset(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        try:
+            result = _sdr.reset_device()
+        except Exception as exc:
+            log_activity(f"sdr reset failed: {exc}", "error")
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        log_activity(f"sdr dongle USB-reset ({result.get('path')})", "ok")
+        self._send_json({"ok": True, **result})
+
     def _handle_sdr_live_events(self, qs):
         if _sdr is None:
             return self._sdr_unavailable()
@@ -3800,6 +3813,7 @@ _UI_HTML = """\
                 </select>
                 <button onclick="sdrLiveStart()">Start</button>
                 <button class="stop" onclick="sdrLiveStop()">Stop</button>
+                <button type="button" onclick="sdrReset()" title="USB-reset a wedged dongle">Reset dongle</button>
             </div>
             <div class="siggen-row">
                 <label>Gain</label>
@@ -4338,6 +4352,16 @@ async function sdrLiveStop() {
     if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
     try { await fetch('/api/sdr/live/stop', { method: 'POST' }); } catch (e) { /* */ }
     document.getElementById('sdr-state').textContent = 'idle';
+}
+async function sdrReset() {
+    if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
+    const st = document.getElementById('sdr-state');
+    st.textContent = 'resetting dongle…';
+    try {
+        const d = await (await fetch('/api/sdr/reset', { method: 'POST' })).json();
+        st.textContent = d.ok ? 'dongle reset OK — available: ' + d.available
+                              : 'reset failed: ' + d.error;
+    } catch (e) { st.textContent = 'reset error'; }
 }
 async function sdrPoll() {
     try {

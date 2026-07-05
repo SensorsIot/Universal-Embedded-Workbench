@@ -27,12 +27,14 @@ Configuration file: ``pi/config/sdr.json`` (see ``_DEFAULT_CONFIG``).
 from __future__ import annotations
 
 import collections
+import glob
 import json
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any, Callable
 
 _LIVE_RSSI = re.compile(
@@ -330,30 +332,57 @@ class SdrReceiver:
                 cmd = self._build_live_cmd(
                     fl, gain, rate, mode, flex, isolate, squelch, hop_interval,
                     ppm, y_opts, sdr_settings)
-                with self._live_guard:
-                    self._live_buf.clear()
-                    self._live_seq = 0
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                    env={**os.environ, "NO_COLOR": "1"})
-                self._live_proc = proc
-                self._live_running = True
-                self._live_cfg = {
+                cfg = {
                     "freqs": fl, "hop": len(fl) > 1, "hop_interval": hop_interval,
                     "gain": gain, "sample_rate": rate, "mode": mode, "flex": flex,
                     "isolate": isolate, "squelch": squelch, "ppm": ppm,
                     "cmd": " ".join(cmd)}
-                self._state.update({"active": True, "mode": "live",
-                                    "freq_hz": fl[0]})
-                t = threading.Thread(target=self._live_reader, args=(proc,),
-                                     daemon=True)
-                self._live_thread = t
-                t.start()
+                self._spawn_live(cmd, cfg, fl[0])
+                # A wedged dongle enumerates but exits ~immediately at the
+                # streaming step (rtl_433 exit 3). Detect that, USB-reset the
+                # device, and retry once so the console self-heals without a
+                # physical replug.
+                if not self._live_alive(1.4):
+                    rc = self._live_proc.poll() if self._live_proc else None
+                    self._live_cleanup()
+                    self._usb_reset()
+                    if not self._lock.acquire(blocking=False):
+                        raise SdrError("SDR busy after reset")
+                    self._live_owns_lock = True
+                    self._spawn_live(cmd, cfg, fl[0])
+                    if not self._live_alive(1.4):
+                        rc = self._live_proc.poll() if self._live_proc else rc
+                        self._live_cleanup()
+                        raise SdrError(
+                            f"dongle not streaming (rtl_433 exit {rc}) even after "
+                            "a USB reset — check USB/power or replug the dongle")
             except Exception:
                 self._live_cleanup()
                 raise
         return self.live_status()
+
+    def _spawn_live(self, cmd: list[str], cfg: dict[str, Any],
+                    freq0: int) -> None:
+        with self._live_guard:
+            self._live_buf.clear()
+            self._live_seq = 0
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, env={**os.environ, "NO_COLOR": "1"})
+        self._live_proc = proc
+        self._live_running = True
+        self._live_cfg = cfg
+        self._state.update({"active": True, "mode": "live", "freq_hz": freq0})
+        t = threading.Thread(target=self._live_reader, args=(proc,), daemon=True)
+        self._live_thread = t
+        t.start()
+
+    def _live_alive(self, settle_s: float) -> bool:
+        """True if rtl_433 is still running after a short settle — i.e. it
+        reached the streaming loop instead of exiting at device open."""
+        time.sleep(settle_s)
+        proc = self._live_proc
+        return bool(proc is not None and proc.poll() is None)
 
     def _live_reader(self, proc: subprocess.Popen) -> None:
         """Fan rtl_433's merged stdout/stderr into the sequence-numbered buffer.
@@ -431,6 +460,58 @@ class SdrReceiver:
         return {"live": self._live_owns_lock and self._live_running,
                 "since": since, "seq": last, "events": items,
                 "config": self._live_cfg if self._live_owns_lock else None}
+
+    # ── device recovery (USB reset) ──────────────────────────────────
+
+    #: RTL2832U vendor/product pairs to match in sysfs.
+    _RTL_USB_IDS = {("0bda", "2838"), ("0bda", "2832")}
+
+    def _find_rtl_usb(self) -> str | None:
+        """Locate the RTL-SDR's /dev/bus/usb node via sysfs, for USBDEVFS_RESET."""
+        for dev in glob.glob("/sys/bus/usb/devices/*"):
+            try:
+                with open(dev + "/idVendor") as f:
+                    vid = f.read().strip()
+                with open(dev + "/idProduct") as f:
+                    pid = f.read().strip()
+            except OSError:
+                continue
+            if (vid, pid) in self._RTL_USB_IDS:
+                try:
+                    with open(dev + "/busnum") as f:
+                        bus = int(f.read())
+                    with open(dev + "/devnum") as f:
+                        num = int(f.read())
+                except (OSError, ValueError):
+                    continue
+                return f"/dev/bus/usb/{bus:03d}/{num:03d}"
+        return None
+
+    def _usb_reset(self) -> str:
+        """Issue USBDEVFS_RESET to the dongle — recovers the wedged state where
+        it enumerates but fails at streaming (rtl_433 exit 3)."""
+        import fcntl
+        path = self._find_rtl_usb()
+        if not path:
+            raise SdrError("no RTL-SDR USB device found to reset")
+        usbdevfs_reset = ord("U") << 8 | 20
+        fd = os.open(path, os.O_WRONLY)
+        try:
+            fcntl.ioctl(fd, usbdevfs_reset, 0)
+        finally:
+            os.close(fd)
+        time.sleep(1.5)          # let it re-enumerate before re-probing
+        return path
+
+    def reset_device(self) -> dict[str, Any]:
+        """Stop any live session and USB-reset the dongle (operator recovery,
+        no SSH needed). Re-probes hardware afterwards."""
+        self.stop_live()
+        with self._live_admin:
+            path = self._usb_reset()
+        self._hardware = self._detect_hardware()
+        return {"reset": True, "path": path, "hardware": self.hardware_status(),
+                "available": self.available()}
 
     # ── staged acquisition ───────────────────────────────────────────
 
