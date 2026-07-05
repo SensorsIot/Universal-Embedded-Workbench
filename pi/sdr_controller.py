@@ -297,15 +297,19 @@ class SdrReceiver:
             cmd += ["-Y", "squelch"]
         for y in y_opts or []:
             cmd += ["-Y", str(y)]
-        if mode == "analyze":
-            cmd += ["-A"]              # analyzer text carries its own RSSI line
-        else:
+        # -A (pulse analyzer) runs in every mode: it reports a level for EVERY
+        # burst whether or not it decodes, so the signal meter shows RF presence
+        # + strength independent of decoding. The decoders still run alongside
+        # it (unless mode=analyze isolates the analyzer) and fill the event
+        # table / codes when a packet matches.
+        cmd += ["-A", "-M", "level"]
+        if mode != "analyze":
             if mode == "flex":
                 if isolate:
                     cmd += ["-R", "0"]
                 if flex:
                     cmd += ["-X", str(flex)]
-            cmd += ["-F", "json", "-M", "level", "-M", "time:iso"]
+            cmd += ["-F", "json", "-M", "time:iso"]
         return cmd
 
     def start_live(self, freqs: list[int] | None = None,
