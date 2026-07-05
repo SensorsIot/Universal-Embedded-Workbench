@@ -3852,7 +3852,7 @@ _UI_HTML = """\
                 <span class="fld"><label>Codes seen</label>
                     <span style="color:#8ab;font-size:0.8em">(click to copy)</span></span>
                 <div id="sdr-codes" style="display:flex;gap:6px;flex-wrap:wrap"></div>
-                <button type="button" onclick="sdrCodes.clear();sdrRenderCodes()">Clear</button>
+                <button type="button" onclick="sdrCodeCounts.clear();sdrRenderCodes()">Clear</button>
             </div>
             <div id="sdr-state" class="siggen-state">idle</div>
             <div class="siggen-row sdr-tabs" style="gap:6px">
@@ -4300,7 +4300,7 @@ setInterval(fetchLog, 1500);   // snappier activity log for live operator prompt
 // ── SDR Console ──────────────────────────────────────────────────────
 let sdrSince = 0, sdrTimer = null, sdrRawBuf = [], sdrAnBuf = [];
 let sdrLines = 0, sdrEvents = 0, sdrCmd = '';
-let sdrCodes = new Set();
+let sdrCodeCounts = new Map();   // code -> times seen; chip shown once >=2
 let sdrRssiAge = 99;
 
 function sdrLiveApply() { if (sdrTimer) sdrLiveStart(); }   // relaunch if running
@@ -4330,21 +4330,25 @@ function sdrCollectCodes(e) {
     }
     const m = e.line.match(/codes\\s*:\\s*(.+)/);   // analyze-mode "codes : {18}7f480, ..."
     if (m) for (const t of (m[1].match(/\\{\\d+\\}[0-9a-fA-F]+/g) || [])) found.push(t);
-    let added = false;
+    let changed = false;
     for (const code of found) {
         const bm = code.match(/^\\{(\\d+)\\}/);
-        if (bm && parseInt(bm[1]) >= 8 && !sdrCodes.has(code)) { sdrCodes.add(code); added = true; }
+        if (!bm || parseInt(bm[1]) < 8) continue;
+        const n = (sdrCodeCounts.get(code) || 0) + 1;
+        sdrCodeCounts.set(code, n);
+        if (n >= 2) changed = true;   // crossed / updated the display threshold
     }
-    return added;
+    return changed;
 }
 function sdrRenderCodes() {
     const box = document.getElementById('sdr-codes');
     box.innerHTML = '';
-    for (const code of sdrCodes) {
+    const shown = [...sdrCodeCounts.entries()].filter(e => e[1] >= 2).sort((a, b) => b[1] - a[1]);
+    for (const [code, n] of shown) {
         const chip = document.createElement('span');
         chip.className = 'codechip';
-        chip.textContent = code;
-        chip.title = 'click to copy';
+        chip.textContent = code + '  \\u00d7' + n;
+        chip.title = 'click to copy ' + code;
         chip.onclick = () => sdrCopyText(code, chip);
         box.appendChild(chip);
     }
@@ -4440,7 +4444,7 @@ async function sdrLiveStart() {
     sdrCmd = d.config ? d.config.cmd : '';
     st.textContent = 'LIVE — ' + sdrCmd;
     sdrView(mode === 'analyze' ? 'analyzer' : 'table');   // show the right view
-    sdrLines = 0; sdrEvents = 0; sdrCodes.clear(); sdrRenderCodes();
+    sdrLines = 0; sdrEvents = 0; sdrCodeCounts.clear(); sdrRenderCodes();
     if (sdrTimer) clearInterval(sdrTimer);
     sdrTimer = setInterval(sdrPoll, 500);
 }
