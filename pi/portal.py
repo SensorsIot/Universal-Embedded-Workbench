@@ -1627,7 +1627,6 @@ def _do_enter_portal(portal_ssid: str, wifi_ssid: str, wifi_password: str,
         if extra:
             fields.update(extra)
         query = urllib.parse.urlencode(fields)
-        import base64
         url = f"http://{portal_ip}{save_path}"
         headers = {}
         body_b64 = None
