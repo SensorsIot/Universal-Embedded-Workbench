@@ -203,12 +203,16 @@ class SdrReceiver:
                 "analyzer": analyzer}
 
     def power(self, freq_hz: int | None = None, duration_s: int | None = None,
-              span_hz: int = 40000, bin_hz: int = 2000) -> dict[str, Any]:
+              span_hz: int = 40000, bin_hz: int = 2000,
+              notch_hz: int = 0) -> dict[str, Any]:
         """Measure narrowband RF power around ``freq_hz`` with rtl_power.
 
         Returns `{peak_db, mean_db}` over a small span centred on the target —
         a carrier (e.g. an OOK transmitter keying at 433.92) lifts `peak_db`
         clear of the broadband noise that decode-based detection drowns in.
+        ``notch_hz`` excludes bins within that distance of the tuner centre from
+        the peak/mean — the dongle's DC spike always sits there and would
+        otherwise masquerade as the carrier when locating an unknown frequency.
         """
         freq_hz = int(freq_hz or self._config["default_freq_hz"])
         duration_s = self._clamp_duration(duration_s)
@@ -238,14 +242,256 @@ class SdrReceiver:
                     db = float(v)
                 except ValueError:
                     continue
+                bin_freq = f_low + i * f_step
+                if notch_hz and abs(bin_freq - freq_hz) <= notch_hz:
+                    continue          # skip the DC spike at the tuner centre
                 dbs.append(db)
                 if peak_db is None or db > peak_db:
                     peak_db = db
-                    peak_freq = int(f_low + i * f_step)
+                    peak_freq = int(bin_freq)
         return {"freq_hz": freq_hz, "duration_s": duration_s,
                 "peak_db": peak_db, "peak_freq_hz": peak_freq,
                 "mean_db": (sum(dbs) / len(dbs)) if dbs else None,
                 "bins": len(dbs)}
+
+    # ── staged acquisition ───────────────────────────────────────────
+
+    #: R820T tuner gain steps (dB), low→high, used for the level sweep.
+    _GAIN_STEPS = (0.9, 8.7, 16.6, 25.4, 33.8, 40.2, 49.6)
+
+    def acquire(self, freq_hz: int | None = None, span_hz: int = 500_000,
+                bin_hz: int = 10_000, gains: list[float] | None = None,
+                dwell_s: int = 3, decode_s: int = 12,
+                flex: str | None = None, wait_s: int = 30) -> dict[str, Any]:
+        """Phased receive: locate → level → decode → classify.
+
+        A single guided acquisition that keeps a strong near-field source from
+        being mis-read.  Each phase gates the next and the report says exactly
+        where it stopped:
+
+          1. **locate**   — poll ``rtl_power`` (up to ``wait_s``) until a carrier
+                             appears across ``span_hz`` around ``freq_hz`` →
+                             the true carrier (strongest bin). Waiting instead of
+                             one fixed window means a momentary keyfob press is
+                             caught whenever the operator sends it.
+          2. **level**    — sweep tuner gain at the carrier; flag saturation;
+                             pick the best clean gain, or report *too strong*
+                             if it saturates even at minimum gain.
+          3. **decode**   — derive/confirm a custom flex decoder (``-X``) and
+                             extract the repeating codeword — not the built-ins.
+          4. **classify** — only once decoded, check whether any built-in
+                             ``rtl_433`` decoder also recognises the signal.
+
+        Keep the transmitter keyed while it runs; ``locate`` waits for the first
+        press, then the level/decode phases need it kept active.
+        """
+        freq_hz = int(freq_hz or self._config["default_freq_hz"])
+        report: dict[str, Any] = {"requested_freq_hz": freq_hz, "phases": {}}
+
+        # Phase 1 — locate (poll until the carrier appears) ---------------
+        margin = None
+        located = False
+        carrier = None
+        polls = 0
+        loc: dict[str, Any] = {}
+        for polls in range(1, max(1, wait_s // 2) + 1):
+            loc = self.power(freq_hz, duration_s=2, span_hz=span_hz,
+                             bin_hz=bin_hz, notch_hz=2 * bin_hz)
+            if loc.get("peak_db") is not None and loc.get("mean_db") is not None:
+                margin = loc["peak_db"] - loc["mean_db"]
+                if margin >= 6.0:
+                    located = True
+                    carrier = int(loc.get("peak_freq_hz") or freq_hz)
+                    break
+        report["phases"]["locate"] = {
+            **loc, "peak_margin_db": margin, "located": located,
+            "carrier_freq_hz": carrier, "polls": polls}
+        if not located:
+            report["ok_phase"] = "locate-failed"
+            report["summary"] = (
+                "No carrier found — the strongest bin is not clear of the "
+                "noise floor. Is the transmitter keyed and in range?")
+            return report
+
+        # Phase 2 — level -------------------------------------------------
+        steps = gains if gains is not None else list(self._GAIN_STEPS)
+        sweep: list[dict[str, Any]] = []
+        suggested: dict[float, str] = {}
+        for g in steps:
+            text = self.analyze(carrier, duration_s=dwell_s, gain=g)["analyzer"]
+            stats = self._pulse_stats(text)
+            sug = self._suggested_flex(text)
+            if sug:
+                suggested[g] = sug
+            sweep.append({
+                "gain": g, "detected": stats["pulse_bins"] > 0,
+                # rtl_433 -A only emits a flex spec once it reads the waveform
+                # as clean OOK/PWM; a saturated OOK signal reads as FSK and it
+                # gives up ("No clue"). So a flex suggestion == properly leveled.
+                "clean_ook": sug is not None,
+                "fsk_dominated": stats["fsk_dominated"],
+                "max_snr": self._max_snr(text)})
+        detected = [s for s in sweep if s["detected"]]
+        clean = [s for s in detected
+                 if s["clean_ook"] or (flex and not s["fsk_dominated"])]
+        if not detected:
+            report["phases"]["level"] = {"sweep": sweep, "chosen_gain": None}
+            report["ok_phase"] = "level-nosignal"
+            report["summary"] = (
+                "Power scan saw a carrier but no pulses demodulated at any "
+                "gain — likely a continuous/unmodulated carrier or interference.")
+            return report
+        if not clean:
+            report["phases"]["level"] = {
+                "sweep": sweep, "chosen_gain": None, "too_strong": True}
+            report["ok_phase"] = "too-strong"
+            report["summary"] = (
+                "SIGNAL TOO STRONG — detected at every gain but never reads as "
+                "a clean OOK codeword (the saturated front end reads it as FSK). "
+                "Increase distance from the antenna or add an attenuator; if the "
+                "source is genuinely FSK, pass an explicit flex spec.")
+            return report
+        # Proper attenuation = the LOWEST gain that still reads clean: it clears
+        # the noise floor without pushing the front end toward saturation.
+        chosen = min(clean, key=lambda s: s["gain"])
+        chosen_gain = chosen["gain"]
+        used_flex = flex or suggested.get(chosen_gain)
+        edge = any(s["fsk_dominated"] for s in sweep if s["gain"] > chosen_gain)
+        report["phases"]["level"] = {
+            "sweep": sweep, "chosen_gain": chosen_gain, "flex": used_flex,
+            "too_strong": False,
+            "warning": ("higher gains saturate into FSK — keep the source at "
+                        "distance / attenuated") if edge else None}
+
+        # Phase 3 — decode (custom, not built-in) -------------------------
+        # Retry: a bounded capture can land between presses, so try a few
+        # windows before declaring failure — same "wait for the signal" idea.
+        dec: dict[str, Any] = {}
+        words: list[dict[str, Any]] = []
+        for _ in range(3):
+            dec = self.capture(carrier, duration_s=decode_s, flex=used_flex,
+                               gain=chosen_gain)
+            words = self._dominant_codewords(dec.get("events", []))
+            if words:
+                break
+        report["phases"]["decode"] = {
+            "flex": used_flex, "codewords": words, "packets": dec.get("count"),
+            "max_snr": dec.get("max_snr"), "decoded": bool(words)}
+        if not words:
+            report["ok_phase"] = "decode-failed"
+            report["summary"] = (
+                f"Carrier {carrier} Hz, leveled at gain {chosen_gain} dB, but no "
+                f"stable codeword decoded with flex '{used_flex}'.")
+            return report
+
+        # Phase 4 — classify against built-in decoders --------------------
+        builtin = self.capture(carrier, duration_s=decode_s, gain=chosen_gain)
+        models = sorted({e.get("model") for e in builtin.get("events", [])
+                         if e.get("model")})
+        report["phases"]["classify"] = {
+            "builtin_models": models, "matched": bool(models),
+            "packets": builtin.get("count")}
+        report["ok_phase"] = "complete"
+        top = ", ".join(w["code"] for w in words[:4])
+        report["summary"] = (
+            f"Carrier {carrier} Hz @ gain {chosen_gain} dB; decoded "
+            f"{len(words)} codeword(s): {top}. "
+            + (f"Built-in decoder match: {', '.join(models)}." if models
+               else "No built-in decoder matches — custom signal."))
+        return report
+
+    # ── acquisition helpers ──────────────────────────────────────────
+
+    _DIST_ROW = re.compile(r"count:\s*(\d+),\s*width:\s*(\d+)\s*us")
+
+    def _pulse_stats(self, analyzer_text: str) -> dict[str, Any]:
+        """Summarise an rtl_433 -A capture: pulse-bin count (did it see pulses)
+        and ``fsk_dominated`` — more FSK than OOK packages, the tell of a
+        saturated OOK source (a railed front end reads on/off keying as a
+        constant-amplitude carrier, which rtl_433 classifies as FSK)."""
+        pulse_widths: set[int] = set()
+        section: str | None = None
+        for line in analyzer_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Pulse width distribution"):
+                section = "pulse"
+                continue
+            if stripped.endswith("distribution:") or stripped.startswith(
+                    ("Detected", "RSSI", "Level", "Frequency", "Gap")):
+                section = None
+            if section != "pulse":
+                continue
+            m = self._DIST_ROW.search(line)
+            if m:
+                pulse_widths.add(int(m.group(2)))
+        ook = analyzer_text.count("Detected OOK package")
+        fsk = analyzer_text.count("Detected FSK package")
+        return {"pulse_bins": len(pulse_widths), "ook_pkgs": ook,
+                "fsk_pkgs": fsk, "fsk_dominated": fsk > ook and fsk >= 3}
+
+    @staticmethod
+    def _max_snr(analyzer_text: str) -> float | None:
+        vals = [float(v) for v in re.findall(
+            r"SNR:\s*([-\d.]+)\s*dB", analyzer_text)]
+        return max(vals) if vals else None
+
+    @staticmethod
+    def _suggested_flex(analyzer_text: str) -> str | None:
+        """rtl_433 -A prints ``Use a flex decoder with -X '...'`` once it reads
+        a signal as clean OOK/FSK — reuse that spec verbatim when present."""
+        m = re.search(r"-X '([^']+)'", analyzer_text)
+        return m.group(1) if m else None
+
+    def _dominant_codewords(self, events: list[dict[str, Any]]
+                            ) -> list[dict[str, Any]]:
+        """Extract the repeating codeword(s) from decoded flex rows.
+
+        Restricts to the strongest packets (within 6 dB of the peak RSSI) so the
+        weak noise rows the slicer scrapes up don't drown out the real code —
+        RSSI separates a keyed button (near full scale) from scraped noise far
+        better than SNR here — and reduces each row to its repeating unit
+        (rtl_433 concatenates repeats when it can't see a reset gap)."""
+        rssis = [e["rssi"] for e in events
+                 if isinstance(e.get("rssi"), (int, float))]
+        floor = (max(rssis) - 6.0) if rssis else None
+        counts: dict[str, int] = {}
+        for e in events:
+            rssi = e.get("rssi")
+            if floor is not None and isinstance(rssi, (int, float)) \
+                    and rssi < floor:
+                continue
+            for row in e.get("rows") or []:
+                data = row.get("data")
+                if not isinstance(data, str) or len(data) < 4:
+                    continue
+                unit = self._repeat_unit(data)
+                if len(unit) < 3 or set(unit) <= {"0"} or set(unit) <= {"f"}:
+                    continue          # all-low / all-high / tiny = noise
+                counts[unit] = counts.get(unit, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        return [{"code": w, "count": n} for w, n in ranked[:6]]
+
+    @staticmethod
+    def _repeat_unit(hexstr: str) -> str:
+        """Shortest repeating unit, tolerating a short leading preamble.
+
+        rtl_433 concatenates repeated codewords into one long row when no reset
+        gap separates them (e.g. ``800009000`` preamble + ``7f45dfd17`` ×N);
+        recover the ``7f45dfd17`` unit by scanning small start offsets and
+        periods, accepting the shortest that reconstructs ≥90% of its tail."""
+        best = hexstr
+        for start in range(0, min(16, len(hexstr) // 2)):
+            sub = hexstr[start:]
+            n = len(sub)
+            for period in range(3, n // 2 + 1):
+                if period >= len(best):
+                    break
+                unit = sub[:period]
+                rep = (unit * (n // period + 1))[:n]
+                if sum(a == b for a, b in zip(rep, sub)) / n >= 0.90:
+                    best = unit
+                    break
+        return best
 
     def stop(self) -> dict[str, Any]:
         """Terminate an in-progress capture (from another request thread)."""

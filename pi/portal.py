@@ -1825,6 +1825,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_analyze()
         elif path == "/api/sdr/power":
             self._handle_sdr_power()
+        elif path == "/api/sdr/acquire":
+            self._handle_sdr_acquire()
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
         elif path == "/api/mqtt/start":
@@ -3408,6 +3410,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 bin_hz=int(body.get("bin_hz", 2000)))
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, **result})
+
+    def _handle_sdr_acquire(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        body = self._read_json() or {}
+        try:
+            result = _sdr.acquire(
+                freq_hz=body.get("freq_hz"),
+                span_hz=int(body.get("span_hz", 500_000)),
+                bin_hz=int(body.get("bin_hz", 10_000)),
+                gains=body.get("gains"),
+                dwell_s=int(body.get("dwell_s", 3)),
+                decode_s=int(body.get("decode_s", 12)),
+                flex=body.get("flex"),
+                wait_s=int(body.get("wait_s", 30)))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        log_activity(
+            f"sdr acquire: {result.get('ok_phase')} — {result.get('summary')}",
+            "ok" if result.get("ok_phase") == "complete" else "warn")
         self._send_json({"ok": True, **result})
 
     def _handle_sdr_stop(self):

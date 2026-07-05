@@ -869,6 +869,8 @@ serial-interface mode.
 | GET | /api/sdr/status | Dongle/tool detection + active-capture state (FR-028) |
 | POST | /api/sdr/capture | Decode RF for a bounded window (FR-028) |
 | POST | /api/sdr/analyze | Pulse-analyzer capture for recapturing a remote (FR-028) |
+| POST | /api/sdr/power | Narrowband RF power / carrier location (FR-028) |
+| POST | /api/sdr/acquire | Phased guided receive: locate→level→decode→classify (FR-028) |
 | POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
 | **MQTT Broker** | | |
 | GET | /api/mqtt/status | Broker running state + port (FR-029) |
@@ -2383,6 +2385,7 @@ terminates an active capture early.
 | POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?, flex?, gain?}` | Decode RF for a window; returns decoded records + signal levels |
 | POST | /api/sdr/analyze | `{freq_hz?, duration_s?, gain?}` | Pulse-analyzer capture for recapturing a remote |
 | POST | /api/sdr/power | `{freq_hz?, duration_s?, span_hz?, bin_hz?}` | Narrowband RF power (rtl_power) → `{peak_db, peak_freq_hz, mean_db}` |
+| POST | /api/sdr/acquire | `{freq_hz?, span_hz?, bin_hz?, gains?, dwell_s?, decode_s?, flex?, wait_s?}` | Phased guided receive → per-phase report + `summary` |
 | POST | /api/sdr/stop | — | Terminate an in-progress capture |
 
 `POST /api/sdr/power` runs `rtl_power` over a small span centred on `freq_hz`
@@ -2391,7 +2394,20 @@ carrier lifts `peak_db` clear of broadband band noise — the robust way to
 confirm a transmitter is emitting (WT-1908). `peak_freq_hz` reports the centre
 frequency of the strongest bin, locating a carrier of unknown frequency across
 a wide sweep. Centre the span off the target frequency so the carrier does not
-sit on the dongle's DC spike.
+sit on the dongle's DC spike, or set `notch_hz` to drop bins around the tuner
+centre where the DC spike sits.
+
+`POST /api/sdr/acquire` runs a four-phase guided receive as one call and returns
+a report keyed by phase plus a human-readable `summary` and an `ok_phase`
+marker: **locate** polls `rtl_power` (up to `wait_s`) until a carrier clears the
+noise floor — waiting for the signal rather than sampling one fixed window, so a
+momentary keyfob press is caught whenever sent; **level** sweeps `gains` at the
+carrier and picks the lowest gain that reads clean OOK (rtl_433 emits a flex
+suggestion only on a clean read), or stops with `too_strong` when the front end
+saturates into FSK at every gain; **decode** extracts the repeating codeword with
+a custom flex decoder; **classify** then checks the built-in decoders. The
+`tools/sdr_acquire.py` CLI drives these phases interactively with live operator
+prompts — the operator, not a remote caller, times the transmissions.
 
 Parameters for `capture`:
 

@@ -574,6 +574,30 @@ class WorkbenchDriver:
             body["duration_s"] = duration_s
         return self._api_post("/api/sdr/power", body, timeout=150)
 
+    def sdr_acquire(self, freq_hz: Optional[int] = None,
+                    span_hz: int = 500_000, bin_hz: int = 10_000,
+                    gains: Optional[list] = None, dwell_s: int = 3,
+                    decode_s: int = 12, flex: Optional[str] = None,
+                    wait_s: int = 30) -> dict:
+        """Phased receive: locate → level → decode → classify.
+
+        Guided acquisition that finds the true carrier, picks a non-saturating
+        tuner gain (or reports the signal is too strong), decodes the codeword
+        with a custom flex decoder, then checks the built-in decoders. The
+        transmitter must stay keyed for the whole run. `ok_phase` says where it
+        stopped; `summary` is the human-readable verdict.
+        """
+        body: dict = {"span_hz": span_hz, "bin_hz": bin_hz,
+                      "dwell_s": dwell_s, "decode_s": decode_s,
+                      "wait_s": wait_s}
+        if freq_hz is not None:
+            body["freq_hz"] = freq_hz
+        if gains is not None:
+            body["gains"] = gains
+        if flex is not None:
+            body["flex"] = flex
+        return self._api_post("/api/sdr/acquire", body, timeout=180)
+
     def sdr_stop(self) -> dict:
         """Terminate an in-progress SDR capture."""
         return self._api_post("/api/sdr/stop", {}, timeout=10)
