@@ -876,6 +876,9 @@ serial-interface mode.
 | POST | /api/sdr/live/start | Start the persistent rtl_433 live console (FR-028) |
 | POST | /api/sdr/live/stop | Stop the live console, release the dongle (FR-028) |
 | POST | /api/sdr/reset | USB-reset a wedged dongle (operator recovery) (FR-028) |
+| POST | /api/sdr/log/start | Begin recording the live stream for AI analysis (FR-028) |
+| POST | /api/sdr/log/stop | Stop recording; returns the captured line count (FR-028) |
+| GET | /api/sdr/log | Retrieve the recorded session lines (FR-028) |
 | POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
 | **MQTT Broker** | | |
 | GET | /api/mqtt/status | Broker running state + port (FR-029) |
@@ -2434,6 +2437,17 @@ execCommand fallback since the clipboard API is blocked on the plain-HTTP LAN). 
 applied by a fast rtl_433 relaunch. The live session holds the single-dongle
 lock for its lifetime, so the one-shot capture/analyze/power/acquire endpoints
 report "SDR busy" until it is stopped with `POST /api/sdr/live/stop`.
+
+**Session log for AI analysis.** Because `-A` runs in every mode, the stream
+carries each burst's pulse timing + modulation guess + decoded bits regardless
+of whether it matches a decoder. The console's **Record** controls
+(`/api/sdr/log/start` … `/api/sdr/log/stop`) capture that stream between two
+marks while the operator presses several keys; `GET /api/sdr/log` returns the
+recorded lines. The intended workflow is *log → press keys → stop → AI reverse-
+engineers the timing*: an AI reads the recorded bursts and derives the
+modulation/encoding, the constant preamble/device-ID, and the per-key varying
+field. In-session an assistant reads the log directly; a workbench-hosted
+Claude-API endpoint is the later productization.
 
 **Dongle recovery.** Heavy use can wedge the RTL-SDR into a state where it still
 enumerates but fails at the streaming step (`rtl_433` exits 3 right after

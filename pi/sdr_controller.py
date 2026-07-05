@@ -103,6 +103,11 @@ class SdrReceiver:
         self._live_owns_lock = False
         self._live_guard = threading.Lock()    # guards buffer + seq
         self._live_admin = threading.Lock()    # serialises start/cleanup
+        # Session log: an unbounded-ish capture of the raw stream between
+        # Start-log and Stop, fed to the AI to reverse-engineer an unknown
+        # remote (find modulation, preamble, and the per-key varying field).
+        self._log_active = False
+        self._log: list[dict[str, Any]] = []
         self._hardware = self._detect_hardware()
 
     # ── detection ────────────────────────────────────────────────────
@@ -417,6 +422,8 @@ class SdrReceiver:
                     self._live_seq += 1
                     self._live_buf.append(
                         {"seq": self._live_seq, "line": line, "event": event})
+                    if self._log_active and len(self._log) < 8000:
+                        self._log.append({"seq": self._live_seq, "line": line})
         finally:
             self._live_running = False
 
@@ -464,6 +471,26 @@ class SdrReceiver:
         return {"live": self._live_owns_lock and self._live_running,
                 "since": since, "seq": last, "events": items,
                 "config": self._live_cfg if self._live_owns_lock else None}
+
+    # ── session log (record → AI reverse-engineer) ───────────────────
+
+    def start_log(self) -> dict[str, Any]:
+        with self._live_guard:
+            self._log = []
+            self._log_active = True
+        return {"logging": True, "count": 0,
+                "live": self._live_owns_lock and self._live_running}
+
+    def stop_log(self) -> dict[str, Any]:
+        with self._live_guard:
+            self._log_active = False
+            count = len(self._log)
+        return {"logging": False, "count": count}
+
+    def get_log(self) -> dict[str, Any]:
+        with self._live_guard:
+            return {"logging": self._log_active, "count": len(self._log),
+                    "lines": [e["line"] for e in self._log]}
 
     # ── device recovery (USB reset) ──────────────────────────────────
 

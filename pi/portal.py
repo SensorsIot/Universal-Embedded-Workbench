@@ -1748,6 +1748,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/sdr/live":
             qs = parse_qs(parsed.query)
             self._handle_sdr_live_events(qs)
+        elif path == "/api/sdr/log":
+            if _sdr is None:
+                self._sdr_unavailable()
+            else:
+                self._send_json({"ok": True, **_sdr.get_log()})
         elif path == "/api/mqtt/status":
             self._send_json({"ok": True, **mqtt_controller.status()})
         elif path == "/api/udplog":
@@ -1838,6 +1843,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_live_stop()
         elif path == "/api/sdr/reset":
             self._handle_sdr_reset()
+        elif path == "/api/sdr/log/start":
+            if _sdr is None:
+                self._sdr_unavailable()
+            else:
+                log_activity("sdr log ● recording for AI analysis", "step")
+                self._send_json({"ok": True, **_sdr.start_log()})
+        elif path == "/api/sdr/log/stop":
+            if _sdr is None:
+                self._sdr_unavailable()
+            else:
+                res = _sdr.stop_log()
+                log_activity(f"sdr log ■ stopped ({res.get('count')} lines)", "ok")
+                self._send_json({"ok": True, **res})
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
         elif path == "/api/mqtt/start":
@@ -3854,6 +3872,13 @@ _UI_HTML = """\
                 <div id="sdr-codes" style="display:flex;gap:6px;flex-wrap:wrap"></div>
                 <button type="button" onclick="sdrCodeCounts.clear();sdrRenderCodes()">Clear</button>
             </div>
+            <div class="siggen-row">
+                <span class="fld"><label>Record</label>
+                    <span style="color:#8ab;font-size:0.8em">(log key presses for AI pattern analysis)</span></span>
+                <button type="button" class="preset" onclick="sdrLogStart()">&#9679; Start Log</button>
+                <button type="button" class="stop" onclick="sdrLogStop()">Stop &amp; Analyze</button>
+                <span id="sdr-log-state" style="color:#e0e0e0"></span>
+            </div>
             <div id="sdr-state" class="siggen-state">idle</div>
             <div class="siggen-row sdr-tabs" style="gap:6px">
                 <button type="button" id="sdr-tab-table" class="active" onclick="sdrView('table')">Events</button>
@@ -4452,6 +4477,22 @@ async function sdrLiveStop() {
     if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
     try { await fetch('/api/sdr/live/stop', { method: 'POST' }); } catch (e) { /* */ }
     document.getElementById('sdr-state').textContent = 'idle';
+}
+async function sdrLogStart() {
+    // ensure a stream is running (analyze + AGC) so there's pulse data to log
+    if (!sdrTimer) {
+        document.getElementById('sdr-mode').value = 'analyze'; sdrModeChange();
+        document.getElementById('sdr-agc').checked = true; sdrToggleAgc(false);
+        await sdrLiveStart();
+    }
+    try { await fetch('/api/sdr/log/start', { method: 'POST' }); } catch (e) { /* */ }
+    document.getElementById('sdr-log-state').textContent = '\\u25cf recording — press your keys, then Stop';
+}
+async function sdrLogStop() {
+    let d = {};
+    try { d = await (await fetch('/api/sdr/log/stop', { method: 'POST' })).json(); } catch (e) { /* */ }
+    document.getElementById('sdr-log-state').textContent =
+        'recorded ' + (d.count || 0) + ' lines — ask Claude to analyze the log';
 }
 async function sdrReset() {
     if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
