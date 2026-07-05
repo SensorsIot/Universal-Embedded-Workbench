@@ -1743,6 +1743,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_siggen_frequencies(qs)
         elif path == "/api/sdr/status":
             self._handle_sdr_status()
+        elif path == "/api/sdr/live/status":
+            self._handle_sdr_live_status()
+        elif path == "/api/sdr/live":
+            qs = parse_qs(parsed.query)
+            self._handle_sdr_live_events(qs)
         elif path == "/api/mqtt/status":
             self._send_json({"ok": True, **mqtt_controller.status()})
         elif path == "/api/udplog":
@@ -1827,6 +1832,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_power()
         elif path == "/api/sdr/acquire":
             self._handle_sdr_acquire()
+        elif path == "/api/sdr/live/start":
+            self._handle_sdr_live_start()
+        elif path == "/api/sdr/live/stop":
+            self._handle_sdr_live_stop()
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
         elif path == "/api/mqtt/start":
@@ -3366,6 +3375,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._sdr_unavailable()
         self._send_json({"ok": True, **_sdr.status()})
 
+    def _handle_sdr_live_start(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        body = self._read_json() or {}
+        try:
+            result = _sdr.start_live(
+                freqs=body.get("freqs"),
+                gain=body.get("gain"),
+                sample_rate=body.get("sample_rate"),
+                mode=body.get("mode", "decode"),
+                flex=body.get("flex"),
+                isolate=bool(body.get("isolate", False)),
+                squelch=bool(body.get("squelch", False)),
+                hop_interval=int(body.get("hop_interval", 5)),
+                ppm=body.get("ppm"),
+                y_opts=body.get("y_opts"),
+                sdr_settings=body.get("sdr_settings"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        log_activity(f"sdr live ▶ {result.get('config', {}).get('cmd', '')}", "step")
+        self._send_json({"ok": True, **result})
+
+    def _handle_sdr_live_stop(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        log_activity("sdr live ■ stopped", "ok")
+        self._send_json({"ok": True, **_sdr.stop_live()})
+
+    def _handle_sdr_live_status(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        self._send_json({"ok": True, **_sdr.live_status()})
+
+    def _handle_sdr_live_events(self, qs):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        since = int((qs.get("since", ["0"])[0]) or 0)
+        self._send_json({"ok": True, **_sdr.live_events(since)})
+
     def _handle_sdr_capture(self):
         if _sdr is None:
             return self._sdr_unavailable()
@@ -3665,6 +3713,24 @@ _UI_HTML = """\
         .siggen-hw .ok { color: #28a745; }
         .siggen-hw .off { color: #dc3545; }
         .siggen-state { color: #f0a030; font-weight: bold; }
+        .sdr-section { margin: 20px 0 0; }
+        .sdr-section .chk { display: flex; align-items: center; gap: 4px; color: #ccc; min-width: auto; font-size: 0.9em; }
+        .rssi-meter { position: relative; flex: 1; min-width: 220px; height: 18px; border-radius: 9px;
+            background: linear-gradient(90deg, #6c3483 0%, #2980b9 18%, #2ecc71 42%, #2ecc71 66%, #f1c40f 84%, #e74c3c 100%); }
+        .rssi-marker { position: absolute; top: -3px; width: 3px; height: 24px; background: #fff;
+            box-shadow: 0 0 4px #000; left: 0; transition: left 0.25s; }
+        .sdr-tabs button { background: #0f1a30; color: #cfe; border: 1px solid #0f3460; }
+        .sdr-tabs button.active { background: #0f3460; color: #fff; }
+        .sdr-view { margin-top: 10px; }
+        .sdr-table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+        .sdr-table th, .sdr-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #0f3460; color: #cfe; white-space: nowrap; }
+        .sdr-table th { color: #8ab; position: sticky; top: 0; background: #16213e; }
+        .sdr-table td.data { font-family: monospace; color: #2ecc71; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+        .sdr-table-wrap { max-height: 300px; overflow: auto; }
+        .sdr-mono { background: #0a1020; border-radius: 8px; padding: 10px; font-family: monospace;
+            font-size: 0.78em; color: #9fb; max-height: 300px; overflow: auto; white-space: pre-wrap; }
+        .sdr-strong { color: #e74c3c; font-weight: bold; }
+        .sdr-weak { color: #f1c40f; }
     </style>
 </head>
 <body>
@@ -3714,6 +3780,59 @@ _UI_HTML = """\
                 <input type="number" id="siggen-morse-wpm" value="15" min="1" max="60" style="width: 60px;">
             </div>
             <div id="siggen-state" class="siggen-state">idle</div>
+        </div>
+    </div>
+    <div class="sdr-section" id="sdr-section">
+        <h2>SDR Console (rtl_433)</h2>
+        <div class="siggen-box">
+            <div class="siggen-row">
+                <label>Bands</label>
+                <label class="chk"><input type="checkbox" class="sdr-band" value="433920000" checked> 433.92</label>
+                <label class="chk"><input type="checkbox" class="sdr-band" value="315000000"> 315</label>
+                <label class="chk"><input type="checkbox" class="sdr-band" value="868300000"> 868</label>
+                <label>Hop&nbsp;s</label>
+                <input type="number" id="sdr-hop" value="5" min="1" max="60" style="width:60px">
+                <label>Mode</label>
+                <select id="sdr-mode" onchange="sdrModeChange()">
+                    <option value="decode">decode (all)</option>
+                    <option value="flex">flex (-X)</option>
+                    <option value="analyze">analyze (-A)</option>
+                </select>
+                <button onclick="sdrLiveStart()">Start</button>
+                <button class="stop" onclick="sdrLiveStop()">Stop</button>
+            </div>
+            <div class="siggen-row">
+                <label>Gain</label>
+                <label class="chk"><input type="checkbox" id="sdr-agc" checked onchange="sdrToggleAgc()"> AGC</label>
+                <input type="range" id="sdr-gain" min="0" max="49.6" step="0.1" value="25" disabled
+                    oninput="document.getElementById('sdr-gain-val').textContent=this.value+' dB'">
+                <span id="sdr-gain-val" style="min-width:56px;color:#e0e0e0">auto</span>
+                <label class="chk"><input type="checkbox" id="sdr-squelch"> squelch</label>
+            </div>
+            <div class="siggen-row" id="sdr-flex-row" style="display:none">
+                <label>Flex&nbsp;-X</label>
+                <input type="text" id="sdr-flex" placeholder="n=rmt,m=OOK_PWM,s=416,l=2150,r=16000" style="flex:1;min-width:260px">
+                <label class="chk"><input type="checkbox" id="sdr-isolate"> only -X (-R&nbsp;0)</label>
+            </div>
+            <div class="siggen-row">
+                <label>RSSI</label>
+                <div class="rssi-meter"><div class="rssi-marker" id="sdr-rssi-marker"></div></div>
+                <span id="sdr-rssi-val" style="min-width:150px;color:#e0e0e0">&mdash;</span>
+            </div>
+            <div id="sdr-state" class="siggen-state">idle</div>
+            <div class="siggen-row sdr-tabs" style="gap:6px">
+                <button type="button" id="sdr-tab-table" class="active" onclick="sdrView('table')">Events</button>
+                <button type="button" id="sdr-tab-analyzer" onclick="sdrView('analyzer')">Analyzer</button>
+                <button type="button" id="sdr-tab-raw" onclick="sdrView('raw')">Raw</button>
+            </div>
+            <div id="sdr-view-table" class="sdr-view">
+                <div class="sdr-table-wrap"><table class="sdr-table">
+                    <thead><tr><th>time</th><th>freq</th><th>rssi</th><th>snr</th><th>mod</th><th>model</th><th>data</th></tr></thead>
+                    <tbody id="sdr-tbody"></tbody>
+                </table></div>
+            </div>
+            <div id="sdr-view-analyzer" class="sdr-view sdr-mono" style="display:none"></div>
+            <div id="sdr-view-raw" class="sdr-view sdr-mono" style="display:none"></div>
         </div>
     </div>
     <div class="log-section">
@@ -4142,6 +4261,112 @@ async function refresh() {
 refresh();
 setInterval(refresh, 5000);
 setInterval(fetchLog, 1500);   // snappier activity log for live operator prompts
+
+// ── SDR Console ──────────────────────────────────────────────────────
+let sdrSince = 0, sdrTimer = null, sdrRawBuf = [], sdrAnBuf = [];
+
+function sdrToggleAgc() {
+    const agc = document.getElementById('sdr-agc').checked;
+    document.getElementById('sdr-gain').disabled = agc;
+    document.getElementById('sdr-gain-val').textContent =
+        agc ? 'auto' : document.getElementById('sdr-gain').value + ' dB';
+}
+function sdrModeChange() {
+    const m = document.getElementById('sdr-mode').value;
+    document.getElementById('sdr-flex-row').style.display = (m === 'flex') ? 'flex' : 'none';
+}
+function sdrView(v) {
+    for (const t of ['table', 'analyzer', 'raw']) {
+        document.getElementById('sdr-view-' + t).style.display = (t === v) ? '' : 'none';
+        document.getElementById('sdr-tab-' + t).classList.toggle('active', t === v);
+    }
+}
+function sdrUpdateRssi(ev) {
+    const r = ev.rssi;
+    if (r === undefined || r === null) return;
+    const pos = Math.max(0, Math.min(1, (r + 40) / 40)) * 100;
+    document.getElementById('sdr-rssi-marker').style.left = pos + '%';
+    let txt = r.toFixed(1) + ' dB';
+    if (ev.snr !== undefined && ev.snr !== null) txt += '  SNR ' + ev.snr.toFixed(0);
+    const el = document.getElementById('sdr-rssi-val');
+    el.className = '';
+    if (r > -3) { txt += '  TOO STRONG'; el.className = 'sdr-strong'; }
+    else if (r < -30) { txt += '  weak'; el.className = 'sdr-weak'; }
+    el.textContent = txt;
+}
+function sdrAddRow(ev) {
+    const tb = document.getElementById('sdr-tbody');
+    const tr = document.createElement('tr');
+    const t = (ev.time || '').replace('T', ' ').substring(11);
+    const freq = ev.freq ? (+ev.freq).toFixed(3) : '';
+    const data = ev.data || (ev.codes ? ev.codes.join(' ') :
+        (ev.rows ? ev.rows.map(r => r.data).join(' ') : ''));
+    const cells = [t, freq, ev.rssi != null ? (+ev.rssi).toFixed(1) : '',
+        ev.snr != null ? (+ev.snr).toFixed(0) : '', ev.mod || '', ev.model || ''];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+    const td = document.createElement('td'); td.className = 'data'; td.textContent = data; tr.appendChild(td);
+    tb.insertBefore(tr, tb.firstChild);
+    while (tb.children.length > 200) tb.removeChild(tb.lastChild);
+}
+async function sdrLiveStart() {
+    const bands = [...document.querySelectorAll('.sdr-band:checked')].map(b => parseInt(b.value));
+    if (!bands.length) { document.getElementById('sdr-state').textContent = 'pick at least one band'; return; }
+    const mode = document.getElementById('sdr-mode').value;
+    const body = { freqs: bands, mode: mode,
+        hop_interval: parseInt(document.getElementById('sdr-hop').value) || 5,
+        squelch: document.getElementById('sdr-squelch').checked };
+    if (!document.getElementById('sdr-agc').checked)
+        body.gain = parseFloat(document.getElementById('sdr-gain').value);
+    if (mode === 'flex') {
+        body.flex = document.getElementById('sdr-flex').value;
+        body.isolate = document.getElementById('sdr-isolate').checked;
+    }
+    const resp = await fetch('/api/sdr/live/start', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await resp.json();
+    const st = document.getElementById('sdr-state');
+    if (!d.ok) { st.textContent = 'error: ' + d.error; return; }
+    sdrSince = 0; sdrRawBuf = []; sdrAnBuf = [];
+    document.getElementById('sdr-tbody').innerHTML = '';
+    document.getElementById('sdr-view-analyzer').textContent = '';
+    document.getElementById('sdr-view-raw').textContent = '';
+    st.textContent = 'LIVE — ' + (d.config ? d.config.cmd : '');
+    if (sdrTimer) clearInterval(sdrTimer);
+    sdrTimer = setInterval(sdrPoll, 500);
+}
+async function sdrLiveStop() {
+    if (sdrTimer) { clearInterval(sdrTimer); sdrTimer = null; }
+    try { await fetch('/api/sdr/live/stop', { method: 'POST' }); } catch (e) { /* */ }
+    document.getElementById('sdr-state').textContent = 'idle';
+}
+async function sdrPoll() {
+    try {
+        const resp = await fetch('/api/sdr/live?since=' + sdrSince);
+        const d = await resp.json();
+        if (!d.ok) return;
+        if (!d.live && sdrTimer) {
+            clearInterval(sdrTimer); sdrTimer = null;
+            document.getElementById('sdr-state').textContent = 'stopped (rtl_433 exited)';
+        }
+        for (const e of d.events) {
+            sdrSince = e.seq;
+            sdrRawBuf.push(e.line);
+            const ev = e.event;
+            if (ev) {
+                sdrUpdateRssi(ev);
+                if (!ev.analyzer) sdrAddRow(ev);
+            } else {
+                sdrAnBuf.push(e.line);
+            }
+        }
+        if (sdrRawBuf.length > 400) sdrRawBuf = sdrRawBuf.slice(-400);
+        if (sdrAnBuf.length > 400) sdrAnBuf = sdrAnBuf.slice(-400);
+        const av = document.getElementById('sdr-view-analyzer');
+        const rv = document.getElementById('sdr-view-raw');
+        if (av.style.display !== 'none') { av.textContent = sdrAnBuf.join('\\n'); av.scrollTop = av.scrollHeight; }
+        if (rv.style.display !== 'none') { rv.textContent = sdrRawBuf.join('\\n'); rv.scrollTop = rv.scrollHeight; }
+    } catch (e) { /* ignore */ }
+}
 </script>
 </body>
 </html>

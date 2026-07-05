@@ -871,6 +871,10 @@ serial-interface mode.
 | POST | /api/sdr/analyze | Pulse-analyzer capture for recapturing a remote (FR-028) |
 | POST | /api/sdr/power | Narrowband RF power / carrier location (FR-028) |
 | POST | /api/sdr/acquire | Phased guided receive: locate→level→decode→classify (FR-028) |
+| GET | /api/sdr/live | Poll the live console ring buffer since a sequence number (FR-028) |
+| GET | /api/sdr/live/status | Live console running state + config (FR-028) |
+| POST | /api/sdr/live/start | Start the persistent rtl_433 live console (FR-028) |
+| POST | /api/sdr/live/stop | Stop the live console, release the dongle (FR-028) |
 | POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
 | **MQTT Broker** | | |
 | GET | /api/mqtt/status | Broker running state + port (FR-029) |
@@ -2411,6 +2415,21 @@ prompts — the operator, not a remote caller, times the transmissions. `acquire
 also streams each phase prompt into the portal activity log as it runs (START →
 carrier → gain → decoded → DONE), so an operator watching the workbench web UI
 sees the live instructions without a terminal.
+
+**Live console.** The **SDR Console** panel on the portal page wraps a
+persistent `rtl_433` as an interactive instrument: rtl_433's own flags are the
+controls (band(s) with hop, tuner gain / AGC, sample rate, squelch, decode /
+flex `-X` / analyze `-A` mode, `-M level`) and its output streams back live.
+`POST /api/sdr/live/start` launches the process; a reader thread fans its merged
+stdout/stderr into a 600-entry sequence-numbered ring buffer that the browser
+fast-polls via `GET /api/sdr/live?since=<seq>` (~500 ms; no events dropped — the
+poll cadence only affects latency). The console displays a parsed event table
+(time/freq/RSSI/SNR/mod/model/data), a burst-driven RSSI meter (green mid-band,
+red too-strong/too-weak rails — meaningful only at fixed gain, since AGC pins
+RSSI near full scale), an analyzer view, and a raw toggle. Any control change is
+applied by a fast rtl_433 relaunch. The live session holds the single-dongle
+lock for its lifetime, so the one-shot capture/analyze/power/acquire endpoints
+report "SDR busy" until it is stopped with `POST /api/sdr/live/stop`.
 
 Parameters for `capture`:
 

@@ -26,6 +26,7 @@ Configuration file: ``pi/config/sdr.json`` (see ``_DEFAULT_CONFIG``).
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import re
@@ -33,6 +34,10 @@ import shutil
 import subprocess
 import threading
 from typing import Any, Callable
+
+_LIVE_RSSI = re.compile(
+    r"RSSI:\s*(?P<rssi>[-\d.]+)\s*dB\s*SNR:\s*(?P<snr>[-\d.]+)\s*dB"
+    r"\s*Noise:\s*(?P<noise>[-\d.]+)")
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -79,9 +84,23 @@ class SdrReceiver:
         self._proc: subprocess.Popen | None = None
         self._state: dict[str, Any] = {
             "active": False,
-            "mode": None,          # "decode" | "analyze"
+            "mode": None,          # "decode" | "analyze" | "live"
             "freq_hz": 0,
         }
+        # Live console: a persistent rtl_433 whose output a reader thread fans
+        # into a sequence-numbered ring buffer the browser fast-polls. The live
+        # session holds the dongle lock for its whole lifetime, so one-shot
+        # captures report "SDR busy" until it is stopped.
+        self._live_proc: subprocess.Popen | None = None
+        self._live_thread: threading.Thread | None = None
+        self._live_buf: collections.deque[dict[str, Any]] = \
+            collections.deque(maxlen=600)
+        self._live_seq = 0
+        self._live_cfg: dict[str, Any] = {}
+        self._live_running = False
+        self._live_owns_lock = False
+        self._live_guard = threading.Lock()    # guards buffer + seq
+        self._live_admin = threading.Lock()    # serialises start/cleanup
         self._hardware = self._detect_hardware()
 
     # ── detection ────────────────────────────────────────────────────
@@ -253,6 +272,165 @@ class SdrReceiver:
                 "peak_db": peak_db, "peak_freq_hz": peak_freq,
                 "mean_db": (sum(dbs) / len(dbs)) if dbs else None,
                 "bins": len(dbs)}
+
+    # ── live console (persistent rtl_433 + ring buffer) ──────────────
+
+    def _build_live_cmd(self, freqs: list[int], gain: float | str | None,
+                        sample_rate: int, mode: str, flex: str | None,
+                        isolate: bool, squelch: bool, hop_interval: int,
+                        ppm: int | None, y_opts: list[str] | None,
+                        sdr_settings: str | None) -> list[str]:
+        cmd = [self._config["rtl_433_bin"]]
+        for f in freqs:
+            cmd += ["-f", str(int(f))]
+        if len(freqs) > 1:
+            cmd += ["-H", str(int(hop_interval))]
+        cmd += self._gain_args(gain)
+        cmd += ["-s", str(int(sample_rate))]
+        if ppm:
+            cmd += ["-p", str(int(ppm))]
+        if sdr_settings:
+            cmd += ["-t", str(sdr_settings)]
+        if squelch:
+            cmd += ["-Y", "squelch"]
+        for y in y_opts or []:
+            cmd += ["-Y", str(y)]
+        if mode == "analyze":
+            cmd += ["-A"]              # analyzer text carries its own RSSI line
+        else:
+            if mode == "flex":
+                if isolate:
+                    cmd += ["-R", "0"]
+                if flex:
+                    cmd += ["-X", str(flex)]
+            cmd += ["-F", "json", "-M", "level", "-M", "time:iso"]
+        return cmd
+
+    def start_live(self, freqs: list[int] | None = None,
+                   gain: float | str | None = None,
+                   sample_rate: int | None = None, mode: str = "decode",
+                   flex: str | None = None, isolate: bool = False,
+                   squelch: bool = False, hop_interval: int = 5,
+                   ppm: int | None = None, y_opts: list[str] | None = None,
+                   sdr_settings: str | None = None) -> dict[str, Any]:
+        """Launch a persistent rtl_433 whose output streams into a ring buffer.
+
+        Holds the dongle lock until :meth:`stop_live`. ``freqs`` is a list of Hz
+        (one = locked, several = hop). ``mode`` is ``decode`` | ``flex`` |
+        ``analyze``.
+        """
+        self._require_ready()
+        with self._live_admin:
+            if not self._lock.acquire(blocking=False):
+                raise SdrError("SDR busy — a capture is already running")
+            self._live_owns_lock = True
+            try:
+                fl = [int(f) for f in (freqs or [self._config["default_freq_hz"]])]
+                rate = int(sample_rate or self._config["default_sample_rate"])
+                cmd = self._build_live_cmd(
+                    fl, gain, rate, mode, flex, isolate, squelch, hop_interval,
+                    ppm, y_opts, sdr_settings)
+                with self._live_guard:
+                    self._live_buf.clear()
+                    self._live_seq = 0
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                    env={**os.environ, "NO_COLOR": "1"})
+                self._live_proc = proc
+                self._live_running = True
+                self._live_cfg = {
+                    "freqs": fl, "hop": len(fl) > 1, "hop_interval": hop_interval,
+                    "gain": gain, "sample_rate": rate, "mode": mode, "flex": flex,
+                    "isolate": isolate, "squelch": squelch, "ppm": ppm,
+                    "cmd": " ".join(cmd)}
+                self._state.update({"active": True, "mode": "live",
+                                    "freq_hz": fl[0]})
+                t = threading.Thread(target=self._live_reader, args=(proc,),
+                                     daemon=True)
+                self._live_thread = t
+                t.start()
+            except Exception:
+                self._live_cleanup()
+                raise
+        return self.live_status()
+
+    def _live_reader(self, proc: subprocess.Popen) -> None:
+        """Fan rtl_433's merged stdout/stderr into the sequence-numbered buffer.
+
+        JSON lines become decoded events; ``RSSI:`` analyzer lines become a
+        level-only event so the meter still moves in analyze mode; everything is
+        kept as raw text for the analyzer/raw views."""
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = _ANSI_RE.sub("", raw).rstrip("\n").strip()
+                if not line:
+                    continue
+                event: dict[str, Any] | None = None
+                if line.startswith("{"):
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        event = None
+                elif "RSSI:" in line:
+                    m = _LIVE_RSSI.search(line)
+                    if m:
+                        event = {"rssi": float(m.group("rssi")),
+                                 "snr": float(m.group("snr")),
+                                 "noise": float(m.group("noise")),
+                                 "analyzer": True}
+                with self._live_guard:
+                    self._live_seq += 1
+                    self._live_buf.append(
+                        {"seq": self._live_seq, "line": line, "event": event})
+        finally:
+            self._live_running = False
+
+    def _live_cleanup(self) -> None:
+        proc = self._live_proc
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self._live_proc = None
+        self._live_running = False
+        self._state.update({"active": False, "mode": None, "freq_hz": 0})
+        if self._live_owns_lock:
+            self._live_owns_lock = False
+            self._lock.release()
+
+    def _reap_if_dead(self) -> None:
+        """Reclaim the lock if rtl_433 exited on its own (crash / bad args)."""
+        proc = self._live_proc
+        if self._live_owns_lock and proc is not None and proc.poll() is not None:
+            with self._live_admin:
+                self._live_cleanup()
+
+    def stop_live(self) -> dict[str, Any]:
+        with self._live_admin:
+            self._live_cleanup()
+        return self.live_status()
+
+    def live_status(self) -> dict[str, Any]:
+        self._reap_if_dead()
+        live = self._live_owns_lock and self._live_running
+        return {"live": live, "seq": self._live_seq,
+                "config": self._live_cfg if self._live_owns_lock else None,
+                "hardware": self.hardware_status(),
+                "available": self.available()}
+
+    def live_events(self, since: int = 0) -> dict[str, Any]:
+        self._reap_if_dead()
+        since = int(since or 0)
+        with self._live_guard:
+            items = [e for e in self._live_buf if e["seq"] > since]
+            last = self._live_seq
+        return {"live": self._live_owns_lock and self._live_running,
+                "since": since, "seq": last, "events": items,
+                "config": self._live_cfg if self._live_owns_lock else None}
 
     # ── staged acquisition ───────────────────────────────────────────
 
@@ -537,6 +715,7 @@ class SdrReceiver:
                 "available": self.available()}
 
     def shutdown(self) -> None:
+        self.stop_live()
         self.stop()
 
     # ── internals ────────────────────────────────────────────────────
