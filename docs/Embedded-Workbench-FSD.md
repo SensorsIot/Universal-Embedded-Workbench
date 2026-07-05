@@ -2447,7 +2447,17 @@ recorded lines. The intended workflow is *log → press keys → stop → AI rev
 engineers the timing*: an AI reads the recorded bursts and derives the
 modulation/encoding, the constant preamble/device-ID, and the per-key varying
 field. In-session an assistant reads the log directly; a workbench-hosted
-Claude-API endpoint is the later productization.
+Claude-API endpoint is the later productization. The recorded row is folded into
+the console's **AI Sherlock** toggle (analyze+AGC, record → stop & analyze).
+
+**Device database.** Devices reverse-engineered this way are made permanent as
+`rtl_433` flex decoders in `pi/config/rtl_433.conf`, installed to
+`/etc/rtl_433/rtl_433.conf` (which `rtl_433` auto-loads). Each distinct code
+becomes one `decoder n=<name>,m=OOK_PWM,s=…,l=…,r=…,match={<bits>}<hex>` line, so
+`rtl_433` recognises the device **by name** in every decode with no `-X` needed.
+Verify a new entry offline with `rtl_433 -y '{<bits>}<hex>'`. The reference
+build ships the **Euromot Awning** remote (433.92 MHz OOK-PWM, 18-bit, device id
+`0x7F4`; buttons up=`7f454` down=`7f45c` auto=`7f480` manual=`7f484`).
 
 **Dongle recovery.** Heavy use can wedge the RTL-SDR into a state where it still
 enumerates but fails at the streaming step (`rtl_433` exits 3 right after
@@ -2913,6 +2923,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 9.1 | 2026-04-28 | Codex | Si5351 output level handling documented: backend programs the lowest 2 mA CLK drive-current setting and leaves precise RF level control to the PE4302 attenuator. |
 | 9.2 | 2026-07-05 | Claude | SDR receiver (FR-028): RTL-SDR + `rtl_433` receive-side service, counterpart to the transmit-only signal generator. `decode` mode returns decoded records (remotes/sensors/TPMS); `analyze` mode returns raw pulse timing for recapturing OOK remotes. Single-instance, bounded captures. New `sdr_controller.py`; 4 API endpoints `/api/sdr/{status,capture,analyze,stop}`; driver methods `sdr_*`; WT-1900–1905 test cases. |
 | 9.3 | 2026-07-05 | Claude | Captive-portal provisioning + LAN bridge, verified against the LoRa32 awning (WiFiManager DUT). `enter-portal` parameterized for arbitrary portal forms (WiFiManager `/wifisave`, `s`/`p` + `extra` MQTT fields) with an `internet` option; AP mode gains NAT bridging to `eth0` (`ap_start internet=true`, FR-011) so a provisioned DUT reaches the LAN/internet; MQTT broker wired to the API (FR-029, `/api/mqtt/*`, `mqtt_controller.py`). SDR (FR-028) gains a `flex` `-X` custom-decoder param and `-M level` rssi/snr signal-vs-noise reporting. Test cases WT-1906–1908 (SDR flex/RSSI, RF path), WT-2000–2002 (broker), WT-2100–2102 (captive-portal provisioning). |
+| 9.4 | 2026-07-05 | Claude | SDR (FR-028) gains: fixed-gain (`-g`) + `peak_freq_hz`/`notch_hz` on power; phased `acquire` (locate→level→decode→classify) with `tools/sdr_acquire.py` CLI and live activity-log prompts; the interactive **live console** (persistent `rtl_433`, ring-buffer fast-poll `/api/sdr/live*`, RSSI meter, presets, `-A` in every mode so the signal meter is decode-independent); **AI Sherlock** session log (`/api/sdr/log*`) for AI reverse-engineering of unknown remotes; USB self-heal + `/api/sdr/reset`; and an `rtl_433` device database (`pi/config/rtl_433.conf`) shipping the Euromot Awning remote. New skill `sdr-receiver`. |
 
 ---
 
@@ -3302,7 +3313,9 @@ Add this to /etc/rfc2217/workbench.json:
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
 | `workbench_test.py` | End-to-end workbench tests (WT-100 through WT-1805) |
 | `signal_generator.py` | Unified RF source — Si5351 + optional PE4302 attenuator, GPCLK fallback, Morse keyer |
-| `sdr_controller.py` | RTL-SDR receiver — rtl_433 decode + pulse-analyzer recapture (receive-side of `signal_generator`) |
+| `sdr_controller.py` | RTL-SDR receiver — rtl_433 decode/analyze/power/acquire, live console, session log, USB reset (receive-side of `signal_generator`) |
+| `tools/sdr_acquire.py` | Interactive CLI for the phased `acquire` (locate→level→decode→classify) with live operator prompts |
+| `config/rtl_433.conf` | rtl_433 flex-decoder database (installed to `/etc/rtl_433/rtl_433.conf`); ships the Euromot Awning remote |
 | `mqtt_controller.py` | On-demand mosquitto test broker (open, all-interfaces) for DUT MQTT-client testing (FR-029) |
 | `si5351.py` | Si5351A I²C clock-generator driver |
 | `pe4302.py` | PE4302 3-wire serial step-attenuator driver |
