@@ -2382,7 +2382,14 @@ terminates an active capture early.
 | GET | /api/sdr/status | — | Tool/dongle detection + active-capture state |
 | POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?, flex?}` | Decode RF for a window; returns decoded records + signal levels |
 | POST | /api/sdr/analyze | `{freq_hz?, duration_s?}` | Pulse-analyzer capture for recapturing a remote |
+| POST | /api/sdr/power | `{freq_hz?, duration_s?, span_hz?, bin_hz?}` | Narrowband RF power (rtl_power) → `{peak_db, mean_db}` |
 | POST | /api/sdr/stop | — | Terminate an in-progress capture |
+
+`POST /api/sdr/power` runs `rtl_power` over a small span centred on `freq_hz`
+and returns the peak/mean power (dB). Unlike decode-based detection, a raw
+carrier lifts `peak_db` clear of broadband band noise — the robust way to
+confirm a transmitter is emitting (WT-1908). Centre the span off the target
+frequency so the carrier does not sit on the dongle's DC spike.
 
 Parameters for `capture`:
 

@@ -1824,6 +1824,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_sdr_capture()
         elif path == "/api/sdr/analyze":
             self._handle_sdr_analyze()
+        elif path == "/api/sdr/power":
+            self._handle_sdr_power()
         elif path == "/api/sdr/stop":
             self._handle_sdr_stop()
         elif path == "/api/mqtt/start":
@@ -3389,6 +3391,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result = _sdr.analyze(
                 freq_hz=body.get("freq_hz"),
                 duration_s=body.get("duration_s"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, **result})
+
+    def _handle_sdr_power(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        body = self._read_json() or {}
+        try:
+            result = _sdr.power(
+                freq_hz=body.get("freq_hz"),
+                duration_s=body.get("duration_s"),
+                span_hz=int(body.get("span_hz", 40000)),
+                bin_hz=int(body.get("bin_hz", 2000)))
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         self._send_json({"ok": True, **result})

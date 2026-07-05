@@ -44,6 +44,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "snr_gate_db": 8.0,
     "rtl_433_bin": "rtl_433",
     "rtl_test_bin": "rtl_test",
+    "rtl_power_bin": "rtl_power",
 }
 
 CONFIG_PATHS = (
@@ -179,6 +180,36 @@ class SdrReceiver:
         analyzer = _ANSI_RE.sub("", (stdout + stderr)).strip()
         return {"freq_hz": freq_hz, "duration_s": duration_s,
                 "analyzer": analyzer}
+
+    def power(self, freq_hz: int | None = None, duration_s: int | None = None,
+              span_hz: int = 40000, bin_hz: int = 2000) -> dict[str, Any]:
+        """Measure narrowband RF power around ``freq_hz`` with rtl_power.
+
+        Returns `{peak_db, mean_db}` over a small span centred on the target —
+        a carrier (e.g. an OOK transmitter keying at 433.92) lifts `peak_db`
+        clear of the broadband noise that decode-based detection drowns in.
+        """
+        freq_hz = int(freq_hz or self._config["default_freq_hz"])
+        duration_s = self._clamp_duration(duration_s)
+        lo = freq_hz - span_hz // 2
+        hi = freq_hz + span_hz // 2
+        cmd = [self._config["rtl_power_bin"], "-f", f"{lo}:{hi}:{bin_hz}",
+               "-i", str(duration_s), "-1", "-"]
+        stdout, _ = self._run(cmd, duration_s, mode="power", freq_hz=freq_hz)
+        dbs: list[float] = []
+        for line in stdout.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 7:
+                continue
+            for v in parts[6:]:          # columns 0-5 are metadata, rest are dB
+                try:
+                    dbs.append(float(v))
+                except ValueError:
+                    pass
+        return {"freq_hz": freq_hz, "duration_s": duration_s,
+                "peak_db": max(dbs) if dbs else None,
+                "mean_db": (sum(dbs) / len(dbs)) if dbs else None,
+                "bins": len(dbs)}
 
     def stop(self) -> dict[str, Any]:
         """Terminate an in-progress capture (from another request thread)."""

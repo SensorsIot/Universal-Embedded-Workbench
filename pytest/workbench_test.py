@@ -544,14 +544,19 @@ class TestRfPath:
     """
 
     SLOT = "SLOT3"
-    FLEX = "n=awn,m=OOK_PWM,s=416,l=2150,r=16000"
+    # Narrowband power (rtl_power) isolates the carrier from broadband 433-band
+    # noise, which decode/package counting drowns in. Center off 433.92 so the
+    # awning's carrier doesn't sit on the dongle's DC spike.
+    CENTER_HZ = 434_000_000
+    SPAN_HZ = 2_000_000
 
-    def _capture(self, workbench, reset):
+    def _peak_db(self, workbench, reset):
         box = {}
 
         def run():
-            box["r"] = workbench.sdr_capture(
-                freq_hz=433_920_000, duration_s=8, flex=self.FLEX)
+            box["r"] = workbench.sdr_power(
+                freq_hz=self.CENTER_HZ, duration_s=5,
+                span_hz=self.SPAN_HZ, bin_hz=10_000)
         t = threading.Thread(target=run)
         t.start()
         for _ in range(25):
@@ -562,34 +567,29 @@ class TestRfPath:
                 pass
             time.sleep(0.2)
         if reset:
-            time.sleep(0.6)
+            time.sleep(0.8)
             workbench.serial_reset(slot=self.SLOT)  # boot-home UP burst
         t.join()
-        r = box.get("r", {})
-        return r.get("strong", 0), (r.get("max_snr") or -999)
+        return box.get("r", {}).get("peak_db")
 
     def test_wt1908_transmit_window_exceeds_baseline(self, workbench):
-        """WT-1908: DUT-transmit window has stronger RF than a quiet baseline."""
+        """WT-1908: the DUT's OOK burst raises narrowband RF power vs a quiet
+        baseline (rtl_power). Detects emission independent of decodability."""
         if not _sdr_available(workbench):
             pytest.skip("no RTL-SDR dongle available")
-        # Precondition: the receiver must actually see RF. If the band is dead
-        # (antenna/dongle issue), the test is not meaningful — skip, don't fail.
-        ambient = workbench.sdr_analyze(freq_hz=433_920_000, duration_s=4)
-        if "Detected OOK" not in ambient.get("analyzer", "") and \
-                len(ambient.get("analyzer", "")) < 1000:
-            pytest.skip("SDR receiving no RF (check antenna/dongle) — "
-                        "RF-path test needs a live receive path")
+        # Precondition: the receiver must see RF at all (peak well above 0 dB).
+        base = self._peak_db(workbench, reset=False)
+        if base is None:
+            pytest.skip("SDR returned no power data (check antenna/dongle)")
 
-        # Settle to idle (past the 40 s boot-home), baseline, then active.
         workbench.serial_reset(slot=self.SLOT)
-        time.sleep(45)
-        base_strong, base_snr = self._capture(workbench, reset=False)
-        time.sleep(3)
-        act_strong, act_snr = self._capture(workbench, reset=True)
+        time.sleep(45)                                # settle past boot-home
+        b1 = self._peak_db(workbench, reset=False)
+        active = self._peak_db(workbench, reset=True)  # boot-home transmits
 
-        assert act_strong > base_strong or act_snr > base_snr + 3, (
-            f"no RF-path discrimination: active(strong={act_strong},"
-            f"snr={act_snr}) vs baseline(strong={base_strong},snr={base_snr})")
+        assert active is not None and active > b1 + 5, (
+            f"no carrier from DUT: active peak={active} dB vs baseline "
+            f"{b1} dB (expected a >=5 dB lift during transmission)")
 
 
 # =====================================================================

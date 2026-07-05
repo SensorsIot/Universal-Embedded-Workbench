@@ -559,6 +559,21 @@ class WorkbenchDriver:
             body["duration_s"] = duration_s
         return self._api_post("/api/sdr/analyze", body, timeout=150)
 
+    def sdr_power(self, freq_hz: Optional[int] = None,
+                  duration_s: Optional[int] = None,
+                  span_hz: int = 40000, bin_hz: int = 2000) -> dict:
+        """Narrowband RF power (rtl_power) around freq_hz → {peak_db, mean_db}.
+
+        A carrier at the frequency lifts peak_db above the noise floor, which
+        detects a transmitter that decode-based methods miss in band noise.
+        """
+        body: dict = {"span_hz": span_hz, "bin_hz": bin_hz}
+        if freq_hz is not None:
+            body["freq_hz"] = freq_hz
+        if duration_s is not None:
+            body["duration_s"] = duration_s
+        return self._api_post("/api/sdr/power", body, timeout=150)
+
     def sdr_stop(self) -> dict:
         """Terminate an in-progress SDR capture."""
         return self._api_post("/api/sdr/stop", {}, timeout=10)
