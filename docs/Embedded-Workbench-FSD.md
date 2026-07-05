@@ -865,6 +865,11 @@ serial-interface mode.
 | POST | /api/siggen/atten | Set PE4302 attenuation (FR-027) |
 | GET | /api/siggen/status | Current state + hardware detection (FR-027) |
 | GET | /api/siggen/frequencies | List achievable frequencies in a range (FR-027) |
+| **SDR Receiver** | | |
+| GET | /api/sdr/status | Dongle/tool detection + active-capture state (FR-028) |
+| POST | /api/sdr/capture | Decode RF for a bounded window (FR-028) |
+| POST | /api/sdr/analyze | Pulse-analyzer capture for recapturing a remote (FR-028) |
+| POST | /api/sdr/stop | Terminate an in-progress capture (FR-028) |
 | **Composite** | | |
 | GET | /api/log | Activity log (timestamped entries, filterable with `?since=`) |
 | POST | /api/enter-portal | Ensure device is connected to workbench AP — provision via captive portal if needed |
@@ -2300,6 +2305,89 @@ wt.siggen_stop()
 
 ---
 
+### FR-028 — SDR Receiver (RTL-SDR + rtl_433)
+
+Receive-side RF service and counterpart to the transmit-only Signal
+Generator (FR-027). An RTL2832U dongle and the `rtl_433` toolchain are
+exposed over HTTP so callers decode and recapture RF remotes and sensors
+without opening a shell on the Pi. One dongle backs the service, so
+captures are single-instance and serialized.
+
+#### 28.1 Hardware
+
+| Component | Detail |
+|-----------|--------|
+| Dongle | RTL2832U + tuner (RTL-SDR) on a Pi USB port |
+| Decoder | `rtl_433` (decode + pulse analyzer) |
+| Probe | `rtl_test -t` reports dongle presence at start-up |
+
+Tool and dongle presence are detected at start-up and reported in
+`GET /api/sdr/status`. When either is missing the service loads but every
+capture returns a clean error; if a dongle is hot-plugged after boot the
+next capture re-probes and picks it up.
+
+#### 28.2 Capture Modes
+
+| Mode | Backend command | Returns |
+|------|-----------------|---------|
+| `decode` | `rtl_433 -F json -M time:iso -T <duration>` | List of decoded records (remotes, weather sensors, TPMS, …) as JSON objects |
+| `analyze` | `rtl_433 -A -T <duration>` | Raw pulse/gap timing text plus any guessed codeword — the recapture workflow for OOK remotes |
+
+Every capture is bounded by `duration_s` (clamped to `max_duration_s`,
+default 120 s); `rtl_433` self-exits at the window end. A capture in
+progress rejects a second concurrent request; `POST /api/sdr/stop`
+terminates an active capture early.
+
+#### 28.3 API
+
+| Method | Endpoint | Body / Query | Description |
+|--------|----------|--------------|-------------|
+| GET | /api/sdr/status | — | Tool/dongle detection + active-capture state |
+| POST | /api/sdr/capture | `{freq_hz?, duration_s?, protocols?, sample_rate?}` | Decode RF for a window; returns decoded records |
+| POST | /api/sdr/analyze | `{freq_hz?, duration_s?}` | Pulse-analyzer capture for recapturing a remote |
+| POST | /api/sdr/stop | — | Terminate an in-progress capture |
+
+Parameters for `capture`:
+
+- `freq_hz` (int, optional) — centre frequency in Hz (default 433.92 MHz).
+- `duration_s` (int, optional) — capture window (default 10 s, clamped to
+  `max_duration_s`).
+- `protocols` (int[], optional) — `rtl_433` protocol numbers to restrict
+  decoding to; omitted means all enabled decoders.
+- `sample_rate` (int, optional) — sample rate in Hz (default 250 kHz).
+
+The `decode` response is `{freq_hz, duration_s, count, events}`; `events`
+is the list of `rtl_433` JSON records. The `analyze` response is
+`{freq_hz, duration_s, analyzer}` where `analyzer` is the raw pulse text.
+
+#### 28.4 Configuration
+
+`/etc/rfc2217/sdr.json` (installed by `pi/install.sh` from
+`pi/config/sdr.json`):
+
+```json
+{
+  "default_freq_hz": 433920000,
+  "default_sample_rate": 250000,
+  "default_duration_s": 10,
+  "max_duration_s": 120,
+  "rtl_433_bin": "rtl_433",
+  "rtl_test_bin": "rtl_test"
+}
+```
+
+#### 28.5 Driver Methods
+
+```python
+wt.sdr_status()
+wt.sdr_capture(freq_hz=433_920_000, duration_s=15)     # decode → {count, events}
+wt.sdr_capture(protocols=[12], duration_s=30)          # restrict to one decoder
+wt.sdr_analyze(freq_hz=433_920_000, duration_s=10)     # recapture a remote
+wt.sdr_stop()
+```
+
+---
+
 ## 5. Web Portal
 
 The portal serves a single-page HTML UI at `GET /` (port 8080):
@@ -2596,6 +2684,12 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | WT-1302 | Signal generator frequency list (gpclk) | Signal Generator | No |
 | WT-1303 | Signal generator Morse keying | Signal Generator | No |
 | WT-1304 | Signal generator replaces previous | Signal Generator | No |
+| WT-1900 | SDR status reports tool/dongle detection | SDR Receiver | No |
+| WT-1901 | SDR capture returns decoded events | SDR Receiver | Yes |
+| WT-1902 | SDR capture with protocol filter | SDR Receiver | Yes |
+| WT-1903 | SDR analyze returns pulse timing | SDR Receiver | Yes |
+| WT-1904 | SDR capture rejects concurrent request | SDR Receiver | Yes |
+| WT-1905 | SDR capture clean error when dongle absent | SDR Receiver | No |
 | WT-1400 | Debug start (USB JTAG) | Debug: USB JTAG | Yes |
 | WT-1401 | Debug stop restores serial | Debug: USB JTAG | Yes |
 | WT-1402 | Debug status | Debug: USB JTAG | Yes |
@@ -2661,6 +2755,7 @@ Add `--run-dut` to include tests that require a WiFi device under test.
 | 7.2 | 2026-03-27 | Claude | CW beacon (FR-023): Morse-keyed RF carrier via BCM2835 GPCLK hardware on GPIO 5/6 for direction finder testing; PLLD 500 MHz integer divider for jitter-free 80m band output; PARIS-standard Morse timing 1–60 WPM; cw_beacon.py module; 4 API endpoints; driver methods cw_start/stop/status/frequencies; WT-1300–1304 test cases |
 | 9.0 | 2026-04-27 | Claude | Signal generator cleanup: retired the legacy `/api/cw/*` API and `cw_beacon.py` shim. FR-023 (CW beacon, GPCLK-only) merged into FR-027 (Signal Generator). FR-027 now covers Morse keying, the `freq`, `status`, and `frequencies` endpoints, and the full PE4302 attenuator path. Driver `cw_*` methods removed; tests WT-1300–1304 retargeted at `siggen_*`. Skill `cw-beacon` replaced by `signal-generator`. |
 | 9.1 | 2026-04-28 | Codex | Si5351 output level handling documented: backend programs the lowest 2 mA CLK drive-current setting and leaves precise RF level control to the PE4302 attenuator. |
+| 9.2 | 2026-07-05 | Claude | SDR receiver (FR-028): RTL-SDR + `rtl_433` receive-side service, counterpart to the transmit-only signal generator. `decode` mode returns decoded records (remotes/sensors/TPMS); `analyze` mode returns raw pulse timing for recapturing OOK remotes. Single-instance, bounded captures. New `sdr_controller.py`; 4 API endpoints `/api/sdr/{status,capture,analyze,stop}`; driver methods `sdr_*`; WT-1900–1905 test cases. |
 
 ---
 
@@ -2985,6 +3080,14 @@ Add this to /etc/rfc2217/workbench.json:
 - [x] TASK-124: Implement WT-1300–1304 signal generator test cases
 - [x] TASK-125: Retire `/api/cw/*` and `cw_beacon.py` (v9.0 cleanup — superseded by `/api/siggen/*`)
 
+**SDR Receiver (v9.2):**
+- [x] TASK-180: Implement `sdr_controller.py` (RTL-SDR + rtl_433 decode/analyze, single-instance) (FR-028)
+- [x] TASK-181: Add `/api/sdr/{status,capture,analyze,stop}` endpoints to portal.py (FR-028)
+- [x] TASK-182: Add `sdr_*` methods to `workbench_driver.py`
+- [x] TASK-183: Update install.sh to install `rtl-sdr` + `rtl-433` and copy `sdr_controller.py`
+- [x] TASK-184: Deploy to Pi and verify API endpoints against the RTL-SDR dongle
+- [x] TASK-185: Implement WT-1900–1905 SDR receiver test cases
+
 **Auto-Debug (v8.1):**
 - [x] TASK-160: Auto-start OpenOCD on hotplug add (in _bg_start)
 - [x] TASK-161: Auto-stop OpenOCD on hotplug remove
@@ -3028,7 +3131,7 @@ Add this to /etc/rfc2217/workbench.json:
 
 | Deliverable | Description |
 |-------------|-------------|
-| `portal.py` | HTTP server with serial slot management, WiFi API, BLE API, UDP log, firmware serving, process supervision, hotplug handling |
+| `portal.py` | HTTP server with serial slot management, WiFi API, BLE API, SDR receiver API, UDP log, firmware serving, process supervision, hotplug handling |
 | `wifi_controller.py` | WiFi instrument backend (hostapd, dnsmasq, wpa_supplicant, iw, HTTP relay) |
 | `ble_controller.py` | BLE proxy backend (bleak, scan, connect, write to GATT characteristics) |
 | `plain_rfc2217_server.py` | RFC2217 server with direct DTR/RTS passthrough (all devices) |
@@ -3042,6 +3145,7 @@ Add this to /etc/rfc2217/workbench.json:
 | `conftest.py` | Pytest fixtures (`esp32_workbench`, `wifi_network`, `--wt-url`, `--run-dut`) |
 | `workbench_test.py` | End-to-end workbench tests (WT-100 through WT-1805) |
 | `signal_generator.py` | Unified RF source — Si5351 + optional PE4302 attenuator, GPCLK fallback, Morse keyer |
+| `sdr_controller.py` | RTL-SDR receiver — rtl_433 decode + pulse-analyzer recapture (receive-side of `signal_generator`) |
 | `si5351.py` | Si5351A I²C clock-generator driver |
 | `pe4302.py` | PE4302 3-wire serial step-attenuator driver |
 | `gpclk.py` | BCM2835/7 GPCLK hardware clock primitive (GPIO 5/6) |

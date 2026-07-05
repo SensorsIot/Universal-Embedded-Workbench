@@ -1,0 +1,8 @@
+{
+  "default_freq_hz": 433920000,
+  "default_sample_rate": 250000,
+  "default_duration_s": 10,
+  "max_duration_s": 120,
+  "rtl_433_bin": "rtl_433",
+  "rtl_test_bin": "rtl_test"
+}

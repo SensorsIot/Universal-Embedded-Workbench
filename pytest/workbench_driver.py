@@ -469,6 +469,56 @@ class WorkbenchDriver:
             f"/api/siggen/frequencies?low={low}&high={high}&backend={backend}")
         return result.get("frequencies", [])
 
+    # ── SDR receiver (RTL-SDR + rtl_433) ──────────────────────────────
+
+    def sdr_status(self) -> dict:
+        """Dongle/tool presence and active-capture state."""
+        return self._api_get("/api/sdr/status")
+
+    def sdr_capture(self, freq_hz: Optional[int] = None,
+                    duration_s: Optional[int] = None,
+                    protocols: Optional[list] = None,
+                    sample_rate: Optional[int] = None) -> dict:
+        """Decode RF for a bounded window; returns decoded rtl_433 records.
+
+        Args:
+            freq_hz: Centre frequency in Hz. Default 433.92 MHz.
+            duration_s: Capture window in seconds (clamped to max_duration_s).
+            protocols: Optional list of rtl_433 protocol numbers to restrict to.
+            sample_rate: Optional sample rate in Hz.
+
+        Returns:
+            {freq_hz, duration_s, count, events: [ {rtl_433 record}, ... ]}.
+        """
+        body: dict = {}
+        if freq_hz is not None:
+            body["freq_hz"] = freq_hz
+        if duration_s is not None:
+            body["duration_s"] = duration_s
+        if protocols is not None:
+            body["protocols"] = protocols
+        if sample_rate is not None:
+            body["sample_rate"] = sample_rate
+        return self._api_post("/api/sdr/capture", body, timeout=150)
+
+    def sdr_analyze(self, freq_hz: Optional[int] = None,
+                    duration_s: Optional[int] = None) -> dict:
+        """Pulse-analyzer capture (rtl_433 -A) for recapturing a remote.
+
+        Returns {freq_hz, duration_s, analyzer} where ``analyzer`` is the raw
+        pulse/gap text plus any guessed codeword.
+        """
+        body: dict = {}
+        if freq_hz is not None:
+            body["freq_hz"] = freq_hz
+        if duration_s is not None:
+            body["duration_s"] = duration_s
+        return self._api_post("/api/sdr/analyze", body, timeout=150)
+
+    def sdr_stop(self) -> dict:
+        """Terminate an in-progress SDR capture."""
+        return self._api_post("/api/sdr/stop", {}, timeout=10)
+
     # ── GDB debug ─────────────────────────────────────────────────────
 
     def debug_start(self, slot: str = None, chip: str = None,

@@ -20,6 +20,7 @@ pi/
   config/signalgen.json       # Signal generator config (Si5351 I2C, PE4302 pins)
   udev/                       # udev rules for hotplug
   signal_generator.py         # Unified RF source: Si5351 (I2C) with GPCLK fallback + optional PE4302 attenuator
+  sdr_controller.py           # RTL-SDR receiver: rtl_433 decode + pulse-analyzer recapture (receive-side of signal_generator)
   si5351.py                   # Si5351A I2C clock generator driver
   pe4302.py                   # PE4302 3-wire serial step attenuator driver
   gpclk.py                    # BCM2835/7 GPCLK hardware clock (GPIO 5/6)

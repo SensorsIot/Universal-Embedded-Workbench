@@ -103,6 +103,15 @@ except Exception as _siggen_exc:  # pragma: no cover
     print(f"[siggen] disabled: {_siggen_exc}", flush=True)
     _siggen = None
 
+# RTL-SDR receiver (rtl_433 decode + pulse analyzer) — receive-side of siggen
+try:
+    from sdr_controller import SdrReceiver
+    _sdr: "SdrReceiver | None" = SdrReceiver()
+    print(f"[sdr] hardware: {_sdr.hardware_status()}", flush=True)
+except Exception as _sdr_exc:  # pragma: no cover
+    print(f"[sdr] disabled: {_sdr_exc}", flush=True)
+    _sdr = None
+
 # UDP log receiver — ESP32 devices send debug logs over UDP to port 5555
 UDP_LOG_PORT = int(os.environ.get("UDP_LOG_PORT", "5555"))
 UDP_LOG_MAX_LINES = 2000
@@ -1717,6 +1726,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/siggen/frequencies":
             qs = parse_qs(parsed.query)
             self._handle_siggen_frequencies(qs)
+        elif path == "/api/sdr/status":
+            self._handle_sdr_status()
         elif path == "/api/udplog":
             qs = parse_qs(parsed.query)
             self._handle_get_udplog(qs)
@@ -1791,6 +1802,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_siggen_freq()
         elif path == "/api/siggen/atten":
             self._handle_siggen_atten()
+        elif path == "/api/sdr/capture":
+            self._handle_sdr_capture()
+        elif path == "/api/sdr/analyze":
+            self._handle_sdr_analyze()
+        elif path == "/api/sdr/stop":
+            self._handle_sdr_stop()
         elif path == "/api/firmware/upload":
             self._handle_firmware_upload()
         elif path == "/api/flash":
@@ -3295,6 +3312,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:
             return self._send_json({"ok": False, "error": str(exc)}, 400)
         self._send_json({"ok": True, "frequencies": freqs})
+
+    # ── SDR receiver (RTL-SDR + rtl_433) ──────────────────────────────
+
+    def _sdr_unavailable(self):
+        self._send_json(
+            {"ok": False, "error": "SDR receiver not available"}, 503)
+
+    def _handle_sdr_status(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        self._send_json({"ok": True, **_sdr.status()})
+
+    def _handle_sdr_capture(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        body = self._read_json() or {}
+        try:
+            result = _sdr.capture(
+                freq_hz=body.get("freq_hz"),
+                duration_s=body.get("duration_s"),
+                protocols=body.get("protocols"),
+                sample_rate=body.get("sample_rate"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        log_activity(
+            f"sdr capture: {result['count']} event(s) @ "
+            f"{result['freq_hz']} Hz", "ok")
+        self._send_json({"ok": True, **result})
+
+    def _handle_sdr_analyze(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        body = self._read_json() or {}
+        try:
+            result = _sdr.analyze(
+                freq_hz=body.get("freq_hz"),
+                duration_s=body.get("duration_s"))
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, 400)
+        self._send_json({"ok": True, **result})
+
+    def _handle_sdr_stop(self):
+        if _sdr is None:
+            return self._sdr_unavailable()
+        self._send_json({"ok": True, **_sdr.stop()})
 
     def _serve_ui(self):
         html = _UI_HTML

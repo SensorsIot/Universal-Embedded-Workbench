@@ -27,7 +27,8 @@ if [ "$UPDATE_ONLY" = false ]; then
         hostapd dnsmasq-base \
         mosquitto mosquitto-clients \
         curl iptables \
-        bluetooth bluez
+        bluetooth bluez \
+        rtl-sdr rtl-433
 
     # Python packages not available via apt
     pip3 install esptool bleak smbus2 --break-system-packages 2>/dev/null || true
@@ -97,6 +98,7 @@ cp "$SCRIPT_DIR/morse.py"                   /usr/local/bin/morse.py
 cp "$SCRIPT_DIR/si5351.py"                  /usr/local/bin/si5351.py
 cp "$SCRIPT_DIR/pe4302.py"                  /usr/local/bin/pe4302.py
 cp "$SCRIPT_DIR/signal_generator.py"        /usr/local/bin/signal_generator.py
+cp "$SCRIPT_DIR/sdr_controller.py"          /usr/local/bin/sdr_controller.py
 cp "$SCRIPT_DIR/debug_controller.py"       /usr/local/bin/debug_controller.py
 cp "$SCRIPT_DIR/mqtt_controller.py"         /usr/local/bin/mqtt_controller.py
 cp "$SCRIPT_DIR/sniffer.py"                 /usr/local/bin/sniffer.py
@@ -129,6 +131,13 @@ if [ ! -f /etc/rfc2217/signalgen.json ]; then
     cp "$SCRIPT_DIR/config/signalgen.json" /etc/rfc2217/signalgen.json
 else
     echo "Signal generator config already exists, skipping..."
+fi
+
+if [ ! -f /etc/rfc2217/sdr.json ]; then
+    echo "Installing default SDR receiver config..."
+    cp "$SCRIPT_DIR/config/sdr.json" /etc/rfc2217/sdr.json
+else
+    echo "SDR receiver config already exists, skipping..."
 fi
 
 # Mosquitto test broker config

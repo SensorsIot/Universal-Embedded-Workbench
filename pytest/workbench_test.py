@@ -7,11 +7,12 @@ Tests marked @requires_dut need a WiFi device connected; skip with default run.
 import os
 import re
 import socket
+import threading
 import time
 
 import pytest
 
-from workbench_driver import CommandError, CommandTimeout
+from workbench_driver import CommandError, CommandTimeout, WorkbenchError
 
 # Path to pre-built debug-test firmware binaries
 DEBUG_TEST_DIR = os.path.join(
@@ -418,6 +419,93 @@ class TestSiggen:
         assert status["freq_hz"] == result2["freq_hz"]
 
         workbench.siggen_stop()
+
+
+# =====================================================================
+# WT-19xx  SDR Receiver (RTL-SDR + rtl_433)
+# =====================================================================
+
+
+def _sdr_available(workbench) -> bool:
+    """True when a dongle + rtl_433 are present (capture tests need them)."""
+    try:
+        return bool(workbench.sdr_status().get("available"))
+    except WorkbenchError:
+        return False
+
+
+class TestSdr:
+    """WT-19xx: RTL-SDR receiver tests against /api/sdr/*."""
+
+    def test_wt1900_status_detection(self, workbench):
+        """WT-1900: Status reports tool/dongle detection keys."""
+        status = workbench.sdr_status()
+        assert status["ok"] is True
+        assert status["active"] is False
+        assert isinstance(status["available"], bool)
+        hw = status["hardware"]
+        for key in ("rtl_433", "rtl_test", "device"):
+            assert isinstance(hw[key], bool)
+
+    def test_wt1901_capture_returns_events(self, workbench):
+        """WT-1901: Decode capture returns a structured event list."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        result = workbench.sdr_capture(freq_hz=433_920_000, duration_s=3)
+        assert result["freq_hz"] == 433_920_000
+        assert result["duration_s"] == 3
+        assert isinstance(result["events"], list)
+        assert result["count"] == len(result["events"])
+
+    def test_wt1902_capture_protocol_filter(self, workbench):
+        """WT-1902: Capture restricted to a protocol number is accepted."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        result = workbench.sdr_capture(protocols=[12], duration_s=3)
+        assert result["count"] == len(result["events"])
+
+    def test_wt1903_analyze_returns_pulses(self, workbench):
+        """WT-1903: Analyzer capture returns pulse text without ANSI escapes."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+        result = workbench.sdr_analyze(freq_hz=433_920_000, duration_s=3)
+        assert result["freq_hz"] == 433_920_000
+        assert isinstance(result["analyzer"], str)
+        assert "\x1b[" not in result["analyzer"]
+
+    def test_wt1904_concurrent_capture_rejected(self, workbench):
+        """WT-1904: A second capture while one is active is rejected."""
+        if not _sdr_available(workbench):
+            pytest.skip("no RTL-SDR dongle available")
+
+        def _bg():
+            try:
+                workbench.sdr_capture(duration_s=8)
+            except WorkbenchError:
+                pass
+
+        t = threading.Thread(target=_bg)
+        t.start()
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if workbench.sdr_status().get("active"):
+                    break
+                time.sleep(0.2)
+            else:
+                pytest.fail("capture never became active")
+            with pytest.raises(WorkbenchError):
+                workbench.sdr_capture(duration_s=2)
+        finally:
+            workbench.sdr_stop()
+            t.join(timeout=15)
+
+    def test_wt1905_error_contract_when_absent(self, workbench):
+        """WT-1905: With no dongle present, capture returns a clean error."""
+        if _sdr_available(workbench):
+            pytest.skip("dongle present — absent path not exercised")
+        with pytest.raises(WorkbenchError):
+            workbench.sdr_capture(duration_s=2)
 
 
 # =====================================================================
