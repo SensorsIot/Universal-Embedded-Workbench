@@ -3382,6 +3382,167 @@ Add this to /etc/rfc2217/workbench.json:
 | `gpclk.py` | BCM2835/7 GPCLK hardware clock primitive (GPIO 5/6) |
 | `morse.py` | Backend-agnostic Morse keyer used by `signal_generator` |
 | `debug_controller.py` | GDB debug manager — OpenOCD lifecycle, probe allocation, slot state coordination |
+| `mcp/workbench_mcp.py` | MCP server exposing the whole HTTP API as ~60 MCP tools (stdio proxy, `WORKBENCH_URL`) |
+| `scripts/espota.py` | ArduinoOTA push tool used by `POST /api/ota` |
+
+---
+
+## Appendix D: HTTP API & MCP Reference
+
+All endpoints are served from `http://<pi-ip>:8080`. No authentication. Requests
+and responses are JSON (except firmware/OTA/flash upload+download, which use
+multipart form-data and raw binary). Every response includes `"ok": true|false`;
+errors add `"error": "..."`.
+
+### D.1 Device Discovery
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/devices` | List all slots with status, RFC2217 URL, detected chip, debug port, USB device info |
+| GET | `/api/info` | Pi IP, hostname, total slot count, portal uptime |
+
+`state` is one of `absent`, `idle`, `monitoring`, `resetting`, `debugging`, `recovering`, `download_mode`.
+
+### D.2 Serial Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/serial/reset` | Reset device via DTR/RTS `{"slot"}` → `{"ok", "output": ["boot line", ...]}` |
+| POST | `/api/serial/monitor` | Wait for a pattern `{"slot", "pattern?", "timeout?"}` → `{"ok", "matched", "line", "output"}` |
+| GET | `/api/serial/output` | Passive buffer read `?slot=&lines=&since=` |
+| POST | `/api/serial/recover` | Manual flap-recovery trigger `{"slot"}` |
+| POST | `/api/serial/release` | Release BOOT GPIO + reboot after a download-mode flash `{"slot"}` |
+| POST | `/api/enter-portal` | Provision a captive-portal DUT (WiFiManager: `portal_ssid`, `ssid`, `password`, `save_path=/wifisave`, `field_ssid=s`, `field_password=p`, `method=POST`, `internet`, `extra`); or trigger with `{slot, resets}` |
+| POST | `/api/start` · `/api/stop` | Manually start / stop the proxy for a slot |
+| POST | `/api/hotplug` | udev hotplug event (internal) |
+
+### D.3 GDB Debug
+
+Auto-started on plug-in for USB-JTAG chips / configured ESP-Prog probes; these override auto-detection.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/debug/start` | Start OpenOCD `{"slot?", "chip?", "probe?"}` → `{"ok", "slot", "chip", "gdb_port", "telnet_port"}` |
+| POST | `/api/debug/stop` | Stop OpenOCD `{"slot?"}` |
+| GET | `/api/debug/status` | Debug state per slot |
+| GET | `/api/debug/group` | Slot groups and roles (dual-USB ESP32-S3) |
+| GET | `/api/debug/probes` | Available ESP-Prog probes |
+
+### D.4 WiFi Instrument
+
+AP and STA modes are mutually exclusive.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET · POST | `/api/wifi/mode` | Get / switch mode `{"mode"}` |
+| POST | `/api/wifi/ap_start` | Start SoftAP `{"ssid", "password?", "channel?", "internet?"}` → `{"ok", "ip"}` |
+| POST | `/api/wifi/ap_stop` | Stop SoftAP |
+| GET | `/api/wifi/ap_status` | `{"active", "ssid", "channel", "stations": [{"mac", "ip"}, ...]}` |
+| POST | `/api/wifi/sta_join` · `sta_leave` | Join / leave a network `{"ssid", "pass?"}` |
+| GET | `/api/wifi/scan` | Scan nearby WiFi networks |
+| POST | `/api/wifi/http` | HTTP relay through wlan0 `{"method", "url", "headers?", "body?"}` |
+| GET | `/api/wifi/events` | Long-poll station events `?timeout=` |
+
+### D.5 BLE Proxy
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/ble/scan` | Scan `{"timeout?", "name_filter?"}` → list of `{"address", "name", "rssi"}` |
+| POST | `/api/ble/connect` · `disconnect` | Connect by MAC `{"address"}` / disconnect |
+| GET | `/api/ble/status` | `{"state", "address?"}` |
+| POST | `/api/ble/write` | Write a GATT characteristic `{"characteristic", "data" (hex), "response?"}` |
+
+### D.6 GPIO Control
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/gpio/set` | Drive pin `{"pin", "value": 0\|1\|"z"}` |
+| GET | `/api/gpio/status` | State of all driven pins |
+
+Allowlist `{16,17,18,19,20,21,22,23,24,25,26,27}` (others reserved for I²C/GPCLK/PE4302). Always release with `"z"`.
+
+### D.7 UDP Log
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/udplog` | `?since=&source=&limit=` — buffered log lines |
+| DELETE | `/api/udplog` | Clear the buffer |
+
+### D.8 Firmware Repository
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/firmware/<project>/<file>` | Download binary (ESP32 OTA clients) |
+| GET | `/api/firmware/list` | List firmware files |
+| POST | `/api/firmware/upload` | Upload (multipart: `project` + `file`) |
+| DELETE | `/api/firmware/delete` | Delete `{"project", "filename"}` |
+
+### D.9 Flashing (USB + OTA)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/flash` | Local-Pi esptool flash of a slot (bridge-chip boards). Multipart: `slot`, `chip`, `baud`, `erase?`, one `bin@<offset>` file part per image (§6.7.1) |
+| POST | `/api/ota` | OTA a deployed on-LAN board (espota relayed by the Pi). Multipart: `firmware` file, `target`, `port?`, `auth?` (§6.7.2) |
+
+RFC2217 flashing (esptool from the host) needs no endpoint (§6.7).
+
+### D.10 SDR Receiver
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/sdr/status` | Dongle + tool detection, active state |
+| POST | `/api/sdr/capture` | Decode window `{freq_hz, duration_s, gain?, sample_rate?, flex?}` |
+| POST | `/api/sdr/analyze` | Pulse-analyzer window (raw timing + RSSI) |
+| POST | `/api/sdr/power` | `rtl_power` sweep `{freq_hz, span_hz, bin_hz}` |
+| POST | `/api/sdr/acquire` | Phased locate → level → decode → classify |
+| POST | `/api/sdr/live/start` · `/stop` | Live rtl_433 console |
+| GET | `/api/sdr/live` · `/live/status` | Poll ring buffer `?since=` · console state |
+| POST | `/api/sdr/log/start` · `/stop`, GET `/api/sdr/log` | AI-Sherlock session recording |
+| POST | `/api/sdr/reset` · `/stop` | USB-reset the dongle · stop a capture |
+
+### D.11 Signal Generator
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/siggen/start` | Start carrier `{"freq_hz", "backend?", "channel?", "pin?", "atten_db?", "morse?"}` |
+| POST | `/api/siggen/stop` | Stop carrier |
+| POST | `/api/siggen/freq` | Retune `{"freq_hz", "channel?"}` |
+| POST | `/api/siggen/atten` | PE4302 attenuation `{"db": 0..31.5}` |
+| GET | `/api/siggen/status` | State + hardware detection (`si5351`, `gpclk`, `pe4302`) |
+| GET | `/api/siggen/frequencies` | Achievable frequencies `?low=&high=&backend=` |
+
+### D.12 MQTT Test Broker
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/mqtt/start` · `/stop` | Start / stop the mosquitto test broker |
+| GET | `/api/mqtt/status` | Running state + port |
+
+### D.13 Test Progress & Human Interaction
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/test/update` | Push start/step/result/end |
+| GET | `/api/test/progress` | Current session state |
+| POST | `/api/human-interaction` | Show a modal, block until confirmed `{"message", "timeout?"}` |
+| GET | `/api/human/status` | Is an interaction pending? |
+| POST | `/api/human/done` · `/cancel` | Confirm / cancel the pending interaction |
+
+### D.14 Activity Log
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/log` | Recent activity entries `?since=<iso-timestamp>` |
+
+### D.15 MCP Interface
+
+`mcp/workbench_mcp.py` exposes this entire API as **~60 MCP tools** (one per
+endpoint, from a single `SPECS` table) for MCP clients such as Claude Code and
+Claude Desktop. It is a thin **stdio proxy** that runs on the client machine and
+reaches the bench via `WORKBENCH_URL`: `GET` args become query params, `POST`
+args a JSON body, and `flash`/`ota` upload local firmware files. Adding an
+endpoint above is one row in `SPECS`. Install and client setup: `mcp/README.md`.
+Verified with Claude Code (`claude mcp add` → `claude mcp list` → ✔ Connected).
 
 ---
 
