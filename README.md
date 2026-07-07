@@ -8,6 +8,26 @@ Zero-config by design: on boot the portal walks the Pi's USB hub topology and pr
 
 ---
 
+## Features
+
+Everything below is driven through one HTTP API on port 8080 — or the MCP server.
+
+- **Remote serial (RFC2217)** — every USB slot as a network serial port; works with esptool, PlatformIO, ESP-IDF, any pyserial tool.
+- **Remote GDB / JTAG debug** — OpenOCD auto-starts per chip (C3/C6/H2/S3 USB-JTAG, dual-USB, ESP-Prog).
+- **Flashing** — over USB (RFC2217, or **local-Pi esptool** for CP2102/CH340/CH9102 bridge boards) and **over-the-air** (`POST /api/ota`, espota relayed to deployed on-LAN boards).
+- **SDR receiver (RTL-SDR + rtl_433)** — decode / analyze / rtl_power captures, phased `acquire`, a live rtl_433 console, "AI Sherlock" record→reverse-engineer, an rtl_433 device database, and dongle recovery.
+- **Signal generator (Si5351 / GPCLK + PE4302)** — continuous carrier, Morse/CW beacon, retune, step attenuation.
+- **WiFi test instrument** — SoftAP (optionally NAT-bridged to the LAN), station mode, scan, HTTP relay, and captive-portal provisioning of WiFiManager DUTs.
+- **MQTT test broker** — on-demand mosquitto so DUTs on the WiFi AP can run pub/sub integration tests without internet.
+- **BLE proxy** — scan / connect / write via the Pi's Bluetooth radio.
+- **GPIO control** — drive boot/reset pins to force download mode, simulate buttons.
+- **UDP log receiver**, **OTA firmware repository**, and **test-progress + operator-interaction** tracking.
+- **Web portal** — live dashboard of slots, WiFi, logs, and test progress.
+- **pytest driver** (`WorkbenchDriver`) — all of the above from test scripts.
+- **MCP interface** — the entire API as ~60 MCP tools for Claude Code / Desktop (see [`mcp/`](mcp/README.md)).
+
+---
+
 ## Quick Start
 
 ### Installation
@@ -294,12 +314,29 @@ Both backends share a Morse keyer, so you can key any carrier with a CW message 
 - PE4302: LE=GPIO6 (pin 31), CLK=GPIO12 (pin 32), DATA=GPIO13 (pin 33), VCC=3.3V/5V
 - GPCLK: output on GPIO5 (pin 29) or GPIO6 (pin 31)
 
-### 9. Test Automation
+### 9. SDR Receiver (RTL-SDR + rtl_433)
+
+An RTL-SDR dongle behind the `rtl_433` toolchain receives and decodes 433 / 315 / 868 MHz OOK/FSK devices — remotes, weather sensors, TPMS. It is the receive-side counterpart to the signal generator.
+
+- **Captures** — bounded windows: `capture` (rtl_433 decode → records + RSSI), `analyze` (raw pulse timing + RSSI, decode-independent), `power` (`rtl_power` peak/mean).
+- **Phased `acquire`** — locate → level → decode → classify, guided.
+- **Live console** — a persistent `rtl_433` whose output streams into a sequence-numbered ring buffer the client fast-polls.
+- **AI Sherlock** — record a session of button presses, then reverse-engineer the timing / preamble / per-key field.
+- **Device database** — `rtl_433.conf` flex decoders (installed to `/etc/rtl_433/`) turn a reverse-engineered remote into a named device.
+- **Dongle recovery** — USB reset for a wedged RTL-SDR.
+
+One dongle, one user: one-shot captures and the live console are mutually exclusive.
+
+### 10. MQTT Test Broker
+
+An on-demand mosquitto broker (open, port 1883, reachable at both `192.168.4.1` and the Pi's LAN IP) for MQTT integration tests — DUTs on the WiFi AP publish/subscribe without needing internet. Start / stop / status via the API.
+
+### 11. Test Automation
 
 - **Test progress tracking** -- push live test session updates to the web portal.
 - **Human interaction requests** -- block a test script until an operator confirms a physical action.
 
-### 10. Web Portal
+### 12. Web Portal
 
 A browser-based dashboard at **http://pi-ip:8080** showing all 3 serial slots, WiFi state, activity log, test progress, and human interaction modal. Each slot card shows:
 - Connection status (RUNNING / IDLE / ABSENT / RECOVERING / DOWNLOAD MODE)
@@ -741,6 +778,48 @@ Blocks a test script until the operator confirms a physical action on the Pi.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/log` | Recent activity entries `?since=<iso-timestamp>` |
+
+---
+
+### 13. Flashing (USB + OTA)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/flash` | Local-Pi esptool flash of a slot (bridge-chip boards). Multipart: `slot`, `chip`, `baud`, `erase?`, one `bin@<offset>` file part per image |
+| POST | `/api/ota` | OTA-flash a deployed on-LAN board (espota, relayed by the Pi). Multipart: `firmware` file, `target`, `port?` (3232), `auth?` |
+
+Flashing over RFC2217 (esptool from the host) needs no endpoint — see [Usage](#flash-firmware).
+
+---
+
+### 14. SDR Receiver
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/sdr/status` | Dongle + tool detection, active state |
+| POST | `/api/sdr/capture` | Bounded decode window `{freq_hz, duration_s, gain?, sample_rate?, flex?}` |
+| POST | `/api/sdr/analyze` | Pulse-analyzer window (raw timing + RSSI, decode-independent) |
+| POST | `/api/sdr/power` | `rtl_power` sweep `{freq_hz, span_hz, bin_hz}` |
+| POST | `/api/sdr/acquire` | Phased locate → level → decode → classify |
+| POST | `/api/sdr/live/start` · `/stop` | Start / stop the live rtl_433 console |
+| GET | `/api/sdr/live` · `/live/status` | Poll ring buffer `?since=` · console state |
+| POST | `/api/sdr/log/start` · `/stop`, GET `/api/sdr/log` | AI-Sherlock session recording |
+| POST | `/api/sdr/reset` · `/stop` | USB-reset the dongle · stop a capture |
+
+---
+
+### 15. MQTT Test Broker
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/mqtt/start` · `/stop` | Start / stop the mosquitto test broker |
+| GET | `/api/mqtt/status` | Broker running state + port |
+
+---
+
+## MCP Interface
+
+An MCP server (`mcp/workbench_mcp.py`) exposes this whole API as **~60 MCP tools**, so an MCP client (Claude Code, Claude Desktop) can drive the bench directly. It's a thin stdio proxy that runs on the **client** machine and reaches the bench via the `WORKBENCH_URL` env var. Verified with Claude Code (`claude mcp add` → `claude mcp list` → ✔ Connected). Install and client setup: **[`mcp/README.md`](mcp/README.md)**.
 
 ---
 
