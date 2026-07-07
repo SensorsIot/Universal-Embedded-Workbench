@@ -576,6 +576,40 @@ curl -X POST http://workbench.local:8080/api/flash \
 No `POST /api/serial/reset` is needed afterwards — esptool's
 `--after hard-reset` reboots the device into the new firmware.
 
+#### 6.7.2 Over-the-air flashing via `POST /api/ota`
+
+**When to use:** a board that is **no longer on a USB slot** — deployed on the
+LAN and running ArduinoOTA. A LAN host can OTA a board directly (`espota`,
+`pio run -t upload --upload-port <ip>`); this endpoint exists for clients that
+**cannot** make ArduinoOTA's reverse TCP connection back to themselves — e.g. a
+**NAT'd container or an off-site agent**. The Pi is on the LAN, so it relays the
+push. It is the network sibling of `/api/flash` (USB esptool).
+
+**Behavior:** the portal writes the uploaded image to a temp file and runs
+`espota.py` (installed to `/usr/local/bin/espota.py`) against the target. It
+touches no slot and no proxy — the board is off-USB. A failed OTA does not brick
+the board: the ESP32 only switches partitions on a verified success.
+
+**Request:** `POST /api/ota`, `multipart/form-data`:
+
+| Part | Kind | Meaning |
+|------|------|---------|
+| `firmware` | file | The `.bin` image (part name `firmware`, required) |
+| `target` | field | Board IP or hostname, e.g. `192.168.0.176` / `awning.local` (required) |
+| `port` | field | ArduinoOTA port, default `3232` |
+| `auth` | field | OTA password, if the board sets one (optional) |
+
+**Response:** `{"ok": bool, "returncode": int, "output": "<espota output>",
+"error": <string if failed>}`. `504` if espota times out (board unreachable).
+
+**Example:**
+
+```bash
+curl -X POST http://workbench.local:8080/api/ota \
+  -F target=192.168.0.176 \
+  -F firmware=@.pio/build/<env>/firmware.bin
+```
+
 #### 6.8 RFC2217 Client Best Practices (ttyACM)
 
 When connecting to an ESP32-C3 via RFC2217, the client must prevent DTR

@@ -325,6 +325,23 @@ curl -X POST http://workbench.local:8080/api/serial/reset \
   -H "Content-Type: application/json" -d '{"slot":"SLOT1"}'
 ```
 
+For a **classic ESP32 behind a USB-serial bridge** (CP2102/CH340/CH9102) whose
+auto-reset can't be driven through RFC2217, flash locally on the Pi with
+`POST /api/flash` (`bin@<offset>` file parts) instead.
+
+### Over-the-Air (OTA) Flash
+
+For a board already **deployed on the LAN** (off the USB slots) that a client
+can't reach directly — e.g. a NAT'd container that can't accept ArduinoOTA's
+reverse connection — the workbench relays an OTA push via `POST /api/ota`. (A
+host on the LAN can OTA the board directly and doesn't need this.)
+
+```bash
+curl -X POST http://workbench.local:8080/api/ota \
+  -F target=192.168.0.176 \
+  -F firmware=@.pio/build/<env>/firmware.bin
+```
+
 ### Serial Monitor
 
 ```bash

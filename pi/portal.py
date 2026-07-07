@@ -127,6 +127,7 @@ _beacon_shutdown = threading.Event()
 
 # OTA firmware repository — serve .bin files for ESP32 OTA updates
 FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", "/var/lib/rfc2217/firmware")
+ESPOTA_PATH = os.environ.get("ESPOTA_PATH", "/usr/local/bin/espota.py")
 
 # Serial buffer size — how many lines each slot's ring buffer keeps
 SERIAL_BUF_MAXLEN = 1000
@@ -1779,6 +1780,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_hotplug()
         elif path == "/api/flash":
             self._handle_flash()
+        elif path == "/api/ota":
+            self._handle_ota()
         elif path == "/api/serial/reset":
             self._handle_serial_reset()
         elif path == "/api/serial/monitor":
@@ -3083,6 +3086,122 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         result = flash_device(slot, files, base_args + write_args)
         self._send_json(result, 200 if result.get("ok") else 500)
+
+    def _handle_ota(self):
+        """POST /api/ota — over-the-air firmware update of a networked device.
+
+        The network sibling of /api/flash (USB esptool): the Pi relays an
+        ArduinoOTA (espota) push to a board that is no longer on a USB slot
+        (deployed on the LAN). This is what lets a client that cannot reach the
+        board directly — e.g. a NAT'd container that can't accept ArduinoOTA's
+        reverse TCP connection — still update it, since the Pi is on the LAN.
+
+        Form fields (multipart/form-data):
+          target — board IP or hostname (e.g. 192.168.0.176, awning.local), required
+          port   — ArduinoOTA port (default 3232)
+          auth   — OTA password (optional)
+        File:
+          firmware — the .bin image (part name "firmware"), required
+
+        Returns {"ok", "returncode", "output"}.
+        """
+        if not os.path.isfile(ESPOTA_PATH):
+            self._send_json({"ok": False, "error": f"espota.py not installed at {ESPOTA_PATH}"}, 501)
+            return
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            self._send_json({"ok": False, "error": "expected multipart/form-data"}, 400)
+            return
+        boundary = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[9:].strip('"')
+        if not boundary:
+            self._send_json({"ok": False, "error": "missing boundary"}, 400)
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            self._send_json({"ok": False, "error": "empty body"}, 400)
+            return
+        body = self.rfile.read(length)
+        parts_raw = body.split(b"--" + boundary.encode())
+
+        fields: dict[str, str] = {}
+        firmware: bytes | None = None
+        for part in parts_raw:
+            part = part.strip()
+            if not part or part == b"--":
+                continue
+            if b"\r\n\r\n" in part:
+                header_section, content = part.split(b"\r\n\r\n", 1)
+            elif b"\n\n" in part:
+                header_section, content = part.split(b"\n\n", 1)
+            else:
+                continue
+            if content.endswith(b"\r\n"):
+                content = content[:-2]
+            headers_text = header_section.decode("utf-8", errors="replace")
+            name = None
+            is_file = False
+            for h in headers_text.split("\n"):
+                h = h.strip()
+                if h.lower().startswith("content-disposition"):
+                    for tok in h.split(";"):
+                        tok = tok.strip()
+                        if tok.startswith("name="):
+                            name = tok[5:].strip().strip('"').strip("'")
+                        elif tok.startswith("filename="):
+                            is_file = True
+            if name is None:
+                continue
+            if name == "firmware" and is_file:
+                firmware = content
+            elif not is_file:
+                fields[name] = content.decode("utf-8", errors="replace").strip()
+
+        target = fields.get("target", "").strip()
+        port = fields.get("port", "3232").strip() or "3232"
+        auth = fields.get("auth", "")
+        if not target:
+            self._send_json({"ok": False, "error": "missing 'target' (board IP/hostname)"}, 400)
+            return
+        if not firmware:
+            self._send_json({"ok": False, "error": "missing 'firmware' file part"}, 400)
+            return
+
+        fw_path = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="ota-", suffix=".bin", delete=False) as f:
+                f.write(firmware)
+                fw_path = f.name
+            cmd = ["python3", ESPOTA_PATH, "-i", target, "-p", str(port), "-f", fw_path, "-r"]
+            if auth:
+                cmd += ["-a", auth]
+            log_activity(f"ota → {target}:{port} ({len(firmware)} bytes)", "step")
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            # espota emits \r progress bars; strip them for a readable response.
+            raw = (proc.stdout or "") + (proc.stderr or "")
+            output = "\n".join(
+                ln for ln in raw.replace("\r", "\n").splitlines()
+                if not ln.startswith("Uploading: [")
+            )
+            ok = proc.returncode == 0
+            log_activity(
+                f"ota → {target} " + ("ok" if ok else f"FAILED ({proc.returncode})"),
+                "ok" if ok else "error",
+            )
+            self._send_json(
+                {"ok": ok, "returncode": proc.returncode, "output": output},
+                200 if ok else 500,
+            )
+        except subprocess.TimeoutExpired:
+            self._send_json({"ok": False, "error": "espota timed out (board unreachable?)"}, 504)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 500)
+        finally:
+            if fw_path and os.path.exists(fw_path):
+                os.remove(fw_path)
 
     def _handle_firmware_delete(self):
         body = self._read_json()

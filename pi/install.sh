@@ -118,6 +118,11 @@ chmod +x /usr/local/bin/rfc2217-udev-notify.sh
 cp "$SCRIPT_DIR/scripts/wifi-lease-notify.sh" /usr/local/bin/wifi-lease-notify.sh
 chmod +x /usr/local/bin/wifi-lease-notify.sh
 
+# espota.py: ArduinoOTA push tool, used by POST /api/ota to update deployed
+# (off-USB, on-LAN) boards over the network.
+cp "$SCRIPT_DIR/scripts/espota.py" /usr/local/bin/espota.py
+chmod +x /usr/local/bin/espota.py
+
 # ---------------------------------------------------------------------------
 # 6. Install config files (don't overwrite existing)
 # ---------------------------------------------------------------------------
