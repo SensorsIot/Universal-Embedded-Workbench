@@ -22,7 +22,7 @@ Zero-config by design: on boot the portal walks the Pi's USB hub topology and pr
 - **UDP log receiver**, **OTA firmware repository**, and **test-progress + operator-interaction** tracking.
 - **Web portal** — live dashboard of slots, WiFi, logs, and test progress.
 - **pytest driver** (`WorkbenchDriver`) — all of the above from test scripts.
-- **MCP interface** — the entire API as ~60 MCP tools for Claude Code / Desktop.
+- **MCP interface** — the entire API as 60 MCP tools for Claude Desktop / Code; one-click `.mcpb` install, no dependencies.
 
 Setup is in **[Installation](#installation)**; day-to-day operation in **[Usage](#usage)**. The complete HTTP API and MCP tool reference lives in the FSD, **[Appendix D](docs/Embedded-Workbench-FSD.md#appendix-d-http-api--mcp-reference)**.
 
@@ -323,9 +323,10 @@ The workbench is driven entirely by a JSON HTTP API on `:8080` (no auth; every r
 
 ### MCP
 
-An MCP server (`mcp/workbench_mcp.py`) exposes the whole API as **~60 MCP tools**, so an MCP client (Claude Code, Claude Desktop) can drive the bench directly. It's a thin stdio proxy that runs on the client machine and reaches the bench via `WORKBENCH_URL`.
+An MCP server (`mcp/workbench_mcp.py`) exposes the whole API as **60 MCP tools**, so an MCP client (Claude Desktop, Claude Code) can drive the bench directly — just talk to it. It's a thin stdio proxy that runs on your computer (not the Pi) and reaches the bench via `WORKBENCH_URL`. Pure Python standard library — **no `pip install`**.
 
-- **Setup (Claude Code + Desktop) → [`mcp/README.md`](mcp/README.md)**
+- **Claude Desktop, one click:** download **[`mcp/universal-embedded-workbench.mcpb`](mcp/universal-embedded-workbench.mcpb)** and drag it onto **Settings → Extensions**; enter your workbench URL when prompted. (Needs Python 3 installed.)
+- **Full setup (Desktop `.mcpb` + manual, Claude Code) → [`mcp/README.md`](mcp/README.md)**
 - **Tool reference → [FSD Appendix D](docs/Embedded-Workbench-FSD.md#appendix-d-http-api--mcp-reference)**
 
 ### Troubleshooting
@@ -371,7 +372,8 @@ pytest/
   workbench_driver.py        Python test driver (WorkbenchDriver class)
   conftest.py · workbench_test.py
 mcp/
-  workbench_mcp.py           MCP server (API → ~60 tools); README.md, requirements.txt
+  workbench_mcp.py           MCP server (API → 60 tools, stdlib-only)
+  manifest.json · *.mcpb     Claude Desktop extension (one-click install); README.md
 docs/
   Embedded-Workbench-FSD.md  Full functional specification (Appendix D = API/MCP reference)
 ```

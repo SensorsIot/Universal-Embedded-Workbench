@@ -1,0 +1,41 @@
+{
+  "manifest_version": "0.2",
+  "name": "universal-embedded-workbench",
+  "display_name": "Universal Embedded Workbench",
+  "version": "1.0.0",
+  "description": "Drive a Universal Embedded Workbench (Raspberry Pi ESP32 test bench) from Claude: SDR, signal generator, flashing, OTA, serial, WiFi/provisioning, MQTT, BLE, GPIO, GDB debug.",
+  "long_description": "Exposes the workbench HTTP API as MCP tools so Claude can operate the bench conversationally. Zero Python dependencies (standard library only) — you only need Python 3 on this machine and network reach to the workbench. Set the workbench URL when you install.",
+  "author": {
+    "name": "SensorsIot",
+    "url": "https://github.com/SensorsIot/Universal-Embedded-Workbench"
+  },
+  "homepage": "https://github.com/SensorsIot/Universal-Embedded-Workbench",
+  "documentation": "https://github.com/SensorsIot/Universal-Embedded-Workbench/blob/main/mcp/README.md",
+  "license": "MIT",
+  "keywords": ["esp32", "embedded", "test-bench", "sdr", "rtl_433", "flashing", "ota", "raspberry-pi"],
+  "server": {
+    "type": "python",
+    "entry_point": "workbench_mcp.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["${__dirname}/workbench_mcp.py"],
+      "env": {
+        "WORKBENCH_URL": "${user_config.workbench_url}"
+      }
+    }
+  },
+  "user_config": {
+    "workbench_url": {
+      "type": "string",
+      "title": "Workbench URL",
+      "description": "Base URL of your workbench, e.g. http://192.168.0.87:8080 (or http://workbench.local:8080). Find it in the workbench portal.",
+      "default": "http://workbench.local:8080",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "runtimes": {
+      "python": ">=3.9"
+    }
+  }
+}

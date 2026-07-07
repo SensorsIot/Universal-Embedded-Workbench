@@ -1,24 +1,44 @@
 # Workbench MCP server
 
 An [MCP](https://modelcontextprotocol.io) server that exposes the workbench HTTP
-API as tools, so any MCP client (Claude Code, Claude Desktop, …) can drive the
+API as tools, so any MCP client (Claude Desktop, Claude Code, …) can drive the
 bench directly — SDR, signal generator, flashing, **OTA**, serial, WiFi /
 provisioning, MQTT, BLE, GPIO, GDB debug.
 
 It is a thin stdio proxy: each tool maps 1:1 to an endpoint (`workbench_mcp.py`
-holds the whole mapping in one `SPECS` table). ~60 tools, matching the API.
+holds the whole mapping in one `SPECS` table). 60 tools, matching the API. The
+server is **pure Python standard library — no `pip install`** — so it runs
+anywhere Python 3 does, and ships as a one-click Desktop extension.
 
-## Install
+The server runs on the machine running the MCP client (your laptop), **not** on
+the Pi — it just needs network reach to the workbench, pointed by `WORKBENCH_URL`.
 
-```bash
-pip install -r mcp/requirements.txt      # mcp, requests
-```
+---
 
-The server runs on the **client** machine (the one running the MCP client), not
-on the Pi — it just needs network reach to the workbench. Point it with
-`WORKBENCH_URL` (default `http://192.168.0.87:8080`).
+## Easiest: Claude Desktop one-click (`.mcpb`)
 
-## Add to Claude Code
+For most people. No terminal, no config files.
+
+1. Make sure **Python 3** is installed (macOS has it; on Windows install from
+   [python.org](https://www.python.org/downloads/) and tick **“Add Python to PATH”**).
+2. Download **[`universal-embedded-workbench.mcpb`](universal-embedded-workbench.mcpb)**
+   from this folder.
+3. In Claude Desktop: **Settings → Extensions**, then **drag the `.mcpb` file
+   onto the window** (or click **Install extension** and pick it).
+4. When prompted, enter your **Workbench URL** — e.g. `http://192.168.0.87:8080`
+   (find it in the workbench portal; `http://workbench.local:8080` also works on
+   many networks). Click **Install**.
+
+Done. The workbench tools appear under the tools (hammer) icon. To point at a
+different bench later, open the extension’s settings and change the URL — no
+reinstall needed. To update, install a newer `.mcpb` over the old one.
+
+> The bundle is unsigned, so Desktop shows a “not verified” note on install —
+> expected for a self-hosted extension; continue.
+
+---
+
+## Alternative: Claude Code (CLI)
 
 ```bash
 claude mcp add workbench \
@@ -26,18 +46,14 @@ claude mcp add workbench \
   -- python3 /abs/path/to/Universal-Embedded-Workbench/mcp/workbench_mcp.py
 ```
 
-## Add to Claude Desktop
+Use an **absolute** path. Verify with `claude mcp list` (look for ✔ Connected).
 
-Open **Settings → Developer → Edit Config** (this opens `claude_desktop_config.json`),
-or edit it directly at:
+## Alternative: Claude Desktop manual config
 
-| OS | Path |
-|----|------|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
-
-Add the server (merge into any existing `mcpServers`):
+If you prefer editing config by hand instead of the `.mcpb`: **Settings →
+Developer → Edit Config** opens `claude_desktop_config.json`
+(macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`,
+Linux `~/.config/Claude/`). Merge in:
 
 ```json
 {
@@ -51,13 +67,22 @@ Add the server (merge into any existing `mcpServers`):
 }
 ```
 
-Then **fully restart Claude Desktop** (quit, not just close the window). The
-workbench tools appear under the tools (hammer) icon. Use an **absolute** path to
-`workbench_mcp.py`, and a `python3` that has the deps installed (a venv's
-`python3` works — point `command` at it).
+Then **fully restart** Claude Desktop (quit, not just close the window).
 
-> Tip: verify from a terminal first with `claude mcp add … && claude mcp list`
-> (see above) — same server, quicker feedback than restarting Desktop.
+---
+
+## Building the `.mcpb` yourself
+
+The committed bundle is built from `manifest.json` + `workbench_mcp.py`:
+
+```bash
+cd mcp
+npx @anthropic-ai/mcpb pack .              # or: pack <dir> <output.mcpb>
+```
+
+`manifest.json` declares the `python` server type, wires
+`WORKBENCH_URL` to the `workbench_url` user-config field (what Desktop prompts
+for), and validates with `npx @anthropic-ai/mcpb validate manifest.json`.
 
 ## Tools (by group)
 
@@ -81,3 +106,4 @@ Notes:
   exclusive (the API returns "SDR busy").
 - `ota` targets a **deployed, on-LAN** board; the Pi relays the espota push (see
   the FSD, `POST /api/ota`).
+- Full endpoint/tool reference: **FSD Appendix D**.

@@ -630,16 +630,23 @@ immediately and the RFC2217 negotiation may toggle DTR/RTS.
 #### 6.9 MCP Interface
 
 An MCP (Model Context Protocol) server (`mcp/workbench_mcp.py`) exposes the HTTP
-API as MCP tools, so an MCP client (Claude Code, Claude Desktop, …) can drive the
-bench directly. It is a thin **stdio proxy** — ~60 tools, one per endpoint, held
+API as MCP tools, so an MCP client (Claude Desktop, Claude Code, …) can drive the
+bench directly. It is a thin **stdio proxy** — 60 tools, one per endpoint, held
 in a single `SPECS` table that mirrors the API: `GET` args become query params,
 `POST` args a JSON body, and `flash`/`ota` upload local firmware files. Adding an
 API endpoint is one row in `SPECS`.
 
 The server runs on the **client** machine (not the Pi) and reaches the workbench
-via the `WORKBENCH_URL` env var (default `http://<host>:8080`). Install
-(`pip install -r mcp/requirements.txt` → `mcp`, `requests`) and client setup are
-in `mcp/README.md`.
+via the `WORKBENCH_URL` env var (default `http://<host>:8080`). It uses only the
+Python standard library (stdio JSON-RPC + `urllib`), so it needs **no dependency
+install** — only Python 3. It ships two ways, both in `mcp/README.md`:
+
+- **`mcp/universal-embedded-workbench.mcpb`** — a Claude Desktop extension (built
+  from `mcp/manifest.json` + the server via `npx @anthropic-ai/mcpb pack`).
+  Installed by drag-and-drop; the `workbench_url` user-config field prompts for
+  `WORKBENCH_URL` at install.
+- **manual registration** — `claude mcp add` (Claude Code) or a
+  `claude_desktop_config.json` entry.
 
 **Verified with Claude Code:**
 
@@ -3382,7 +3389,8 @@ Add this to /etc/rfc2217/workbench.json:
 | `gpclk.py` | BCM2835/7 GPCLK hardware clock primitive (GPIO 5/6) |
 | `morse.py` | Backend-agnostic Morse keyer used by `signal_generator` |
 | `debug_controller.py` | GDB debug manager — OpenOCD lifecycle, probe allocation, slot state coordination |
-| `mcp/workbench_mcp.py` | MCP server exposing the whole HTTP API as ~60 MCP tools (stdio proxy, `WORKBENCH_URL`) |
+| `mcp/workbench_mcp.py` | MCP server exposing the whole HTTP API as 60 MCP tools (stdio proxy, `WORKBENCH_URL`, stdlib-only) |
+| `mcp/manifest.json`, `mcp/*.mcpb` | Claude Desktop extension manifest + packed bundle for one-click install |
 | `scripts/espota.py` | ArduinoOTA push tool used by `POST /api/ota` |
 
 ---
@@ -3536,13 +3544,16 @@ RFC2217 flashing (esptool from the host) needs no endpoint (§6.7).
 
 ### D.15 MCP Interface
 
-`mcp/workbench_mcp.py` exposes this entire API as **~60 MCP tools** (one per
-endpoint, from a single `SPECS` table) for MCP clients such as Claude Code and
-Claude Desktop. It is a thin **stdio proxy** that runs on the client machine and
+`mcp/workbench_mcp.py` exposes this entire API as **60 MCP tools** (one per
+endpoint, from a single `SPECS` table) for MCP clients such as Claude Desktop and
+Claude Code. It is a thin **stdio proxy** that runs on the client machine and
 reaches the bench via `WORKBENCH_URL`: `GET` args become query params, `POST`
 args a JSON body, and `flash`/`ota` upload local firmware files. Adding an
-endpoint above is one row in `SPECS`. Install and client setup: `mcp/README.md`.
-Verified with Claude Code (`claude mcp add` → `claude mcp list` → ✔ Connected).
+endpoint above is one row in `SPECS`. The server is standard-library only (no
+`pip install`); it ships as a one-click Claude Desktop `.mcpb` extension
+(`mcp/manifest.json`) or via manual `claude mcp add` / `claude_desktop_config.json`.
+Install and client setup: `mcp/README.md`. Verified with Claude Code
+(`claude mcp add` → `claude mcp list` → ✔ Connected).
 
 ---
 
