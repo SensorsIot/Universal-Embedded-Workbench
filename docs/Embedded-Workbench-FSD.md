@@ -641,6 +641,18 @@ via the `WORKBENCH_URL` env var (default `http://<host>:8080`). Install
 (`pip install -r mcp/requirements.txt` → `mcp`, `requests`) and client setup are
 in `mcp/README.md`.
 
+**Verified with Claude Code:**
+
+```bash
+claude mcp add workbench --env WORKBENCH_URL=http://<host>:8080 \
+  -- python3 /abs/path/to/mcp/workbench_mcp.py
+claude mcp list      # → workbench … ✔ Connected
+```
+
+The health check completes the MCP handshake and enumerates all ~60 tools; live
+tool calls (`sdr_status`, `workbench_devices`, `mqtt_status`, …) return real
+bench data. Tools surface to the client as `mcp__workbench__<name>`.
+
 ### FR-008 — Serial Reset
 
 Reset a device via DTR/RTS signals, providing a clean boot cycle without

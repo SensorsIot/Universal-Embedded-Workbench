@@ -28,7 +28,16 @@ claude mcp add workbench \
 
 ## Add to Claude Desktop
 
-In `claude_desktop_config.json`:
+Open **Settings → Developer → Edit Config** (this opens `claude_desktop_config.json`),
+or edit it directly at:
+
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+Add the server (merge into any existing `mcpServers`):
 
 ```json
 {
@@ -41,6 +50,14 @@ In `claude_desktop_config.json`:
   }
 }
 ```
+
+Then **fully restart Claude Desktop** (quit, not just close the window). The
+workbench tools appear under the tools (hammer) icon. Use an **absolute** path to
+`workbench_mcp.py`, and a `python3` that has the deps installed (a venv's
+`python3` works — point `command` at it).
+
+> Tip: verify from a terminal first with `claude mcp add … && claude mcp list`
+> (see above) — same server, quicker feedback than restarting Desktop.
 
 ## Tools (by group)
 
