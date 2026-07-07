@@ -627,6 +627,20 @@ ser.open()
 **Never** use `serial.Serial('rfc2217://...')` directly — it opens the port
 immediately and the RFC2217 negotiation may toggle DTR/RTS.
 
+#### 6.9 MCP Interface
+
+An MCP (Model Context Protocol) server (`mcp/workbench_mcp.py`) exposes the HTTP
+API as MCP tools, so an MCP client (Claude Code, Claude Desktop, …) can drive the
+bench directly. It is a thin **stdio proxy** — ~60 tools, one per endpoint, held
+in a single `SPECS` table that mirrors the API: `GET` args become query params,
+`POST` args a JSON body, and `flash`/`ota` upload local firmware files. Adding an
+API endpoint is one row in `SPECS`.
+
+The server runs on the **client** machine (not the Pi) and reaches the workbench
+via the `WORKBENCH_URL` env var (default `http://<host>:8080`). Install
+(`pip install -r mcp/requirements.txt` → `mcp`, `requests`) and client setup are
+in `mcp/README.md`.
+
 ### FR-008 — Serial Reset
 
 Reset a device via DTR/RTS signals, providing a clean boot cycle without
