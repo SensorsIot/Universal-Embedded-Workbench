@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import debug_controller
 import gpiod
@@ -47,6 +47,12 @@ FLAP_WINDOW_S = 30       # Look at events within this window
 FLAP_THRESHOLD = 10       # 10 events in 30s — allows dual-USB devices (2 events per plug)
 FLAP_COOLDOWN_S = 10      # After flapping, wait before recovery attempt
 FLAP_MAX_RETRIES = 2      # Max no-GPIO recovery attempts before manual intervention
+
+# Proxy liveness: if the USB device behind a running proxy's devnode
+# re-enumerates (devnum changes) the proxy keeps a stale fd — alive and
+# listening, but relaying nothing. Restart it once the new identity has been
+# stable for this long (debounce, so we don't fight a device mid-re-enumeration).
+PROXY_STALE_GRACE_S = 3
 
 # Native USB (ttyACM) boot delay — let ESP32-C3 boot past download-mode window
 # before opening the port (Linux cdc_acm asserts DTR+RTS on open, which triggers
@@ -593,8 +599,15 @@ def _make_slot(slot_key: str, label: str = None, tcp_port: int = None,
         "_event_times": [],
         "_recovering": False,
         "_recover_retries": 0,
+        "_proxy_dev_id": None,      # USB id (busnum:devnum) the proxy opened
+        "_stale_since": None,       # when the proxy's devnode id first mismatched
+        "_proxy_restarting": False, # a stale-proxy restart is in flight
         "_auto_debug_chip": None,
         "_jtag_slot": None,  # slot label providing JTAG (own or probe)
+        # Workbench-Bridge enhancement: on-demand identity (Identify Device).
+        # Non-underscore keys so they surface in /api/devices via _slot_info().
+        "device_id": "",        # board base MAC — set by Identify Device
+        "chip_info": None,      # esptool chip_id result — set by Identify Device
         "_serial_buf": collections.deque(maxlen=SERIAL_BUF_MAXLEN),
         "_lock": threading.Lock(),
     }
@@ -766,6 +779,10 @@ def start_proxy(slot: dict) -> bool:
             slot["last_error"] = None
             slot["url"] = f"rfc2217://{host_ip}:{tcp_port}"
             slot["state"] = STATE_IDLE
+            # Record the USB identity this proxy opened, so _refresh_slot_health
+            # can detect a stale fd if the device later re-enumerates.
+            slot["_proxy_dev_id"] = _tty_usb_id(devnode)
+            slot["_stale_since"] = None
             print(
                 f"[portal] {label}: proxy started (pid {proc.pid}, port {tcp_port})",
                 flush=True,
@@ -1009,15 +1026,79 @@ def scan_existing_devices():
                 threading.Thread(target=_bg_boot_debug, daemon=True).start()
 
 
+def _tty_usb_id(devnode: str | None) -> str | None:
+    """Identity ("busnum:devnum") of the USB device currently backing *devnode*.
+
+    The devnum increments on every USB (re-)enumeration, so a change here means
+    the device the proxy opened is gone and the proxy's fd is stale. Returns None
+    if the devnode is absent or not a USB tty (best-effort, never raises).
+    """
+    if not devnode:
+        return None
+    try:
+        name = os.path.basename(devnode)               # e.g. ttyACM0
+        iface = os.path.realpath(f"/sys/class/tty/{name}/device")  # .../1-1.1.2:1.0
+        usbdev = os.path.dirname(iface)                # .../1-1.1.2 (the USB device)
+        with open(os.path.join(usbdev, "busnum")) as f:
+            busnum = f.read().strip()
+        with open(os.path.join(usbdev, "devnum")) as f:
+            devnum = f.read().strip()
+        return f"{busnum}:{devnum}"
+    except (OSError, ValueError):
+        return None
+
+
 def _refresh_slot_health(slot: dict):
-    """Check that a slot's proxy is still alive; mark dead if not."""
-    if slot["running"] and slot["pid"]:
-        if not _is_process_alive(slot["pid"]):
-            slot["running"] = False
-            slot["pid"] = None
-            slot["url"] = None
-            slot["last_error"] = "Process died"
-            slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+    """Check that a slot's proxy is still alive; mark dead if not, and restart
+    it if its devnode re-enumerated under it (stale fd)."""
+    if not (slot["running"] and slot["pid"]):
+        return
+
+    if not _is_process_alive(slot["pid"]):
+        slot["running"] = False
+        slot["pid"] = None
+        slot["url"] = None
+        slot["last_error"] = "Process died"
+        slot["state"] = STATE_IDLE if slot["present"] else STATE_ABSENT
+        slot["_stale_since"] = None
+        return
+
+    # Liveness: the proxy holds an fd to the devnode it opened. If the USB
+    # device behind that devnode re-enumerated (devnum changed), the proxy is
+    # alive and still listening on its TCP port but relaying a dead fd — the
+    # wedge that the hotplug 'add' path can miss (e.g. while suppressed during
+    # auto-debug). Heal it once the new identity has been stable for the grace
+    # window, so we don't restart while the device is mid-re-enumeration.
+    opened = slot.get("_proxy_dev_id")
+    current = _tty_usb_id(slot["devnode"]) if slot.get("present") else None
+    if opened and current and current != opened:
+        now = time.time()
+        if slot.get("_stale_since") is None:
+            slot["_stale_since"] = now
+        elif (now - slot["_stale_since"] >= PROXY_STALE_GRACE_S
+                and not slot.get("_proxy_restarting")):
+            slot["_proxy_restarting"] = True
+            slot["last_error"] = "Proxy devnode re-enumerated — restarting (stale fd)"
+            print(f"[portal] {slot.get('label')}: proxy fd stale "
+                  f"(usb {opened} -> {current}), restarting", flush=True)
+            log_activity(f"{slot.get('label')}: proxy device re-enumerated — auto-restarting", "step")
+            lock = slot["_lock"]
+
+            def _bg_stale_restart(s=slot, lk=lock):
+                try:
+                    with lk:
+                        if s["running"] and s["pid"]:
+                            stop_proxy(s)
+                        start_proxy(s)
+                finally:
+                    s["_proxy_restarting"] = False
+                    s["_stale_since"] = None
+
+            threading.Thread(target=_bg_stale_restart, daemon=True).start()
+    else:
+        # ids match, or the device is mid-re-enumeration (current None) — clear
+        # any pending stale timer so only a *persistent* mismatch ever fires.
+        slot["_stale_since"] = None
 
 
 _PROBE_VIDS = {"0403"}  # FTDI (ESP-Prog, etc.)
@@ -1669,6 +1750,192 @@ def _do_enter_portal(portal_ssid: str, wifi_ssid: str, wifi_password: str,
 # HTTP Handler
 # ---------------------------------------------------------------------------
 
+# ===========================================================================
+# Workbench-Bridge enhancement: on-demand chip identification
+# (grep "Workbench-Bridge enhancement" to find every addition in this file)
+# ---------------------------------------------------------------------------
+# The manual "Identify Device" button.
+#   POST /api/devices/<slot>/identify  — esptool chip_id
+# Stops the proxy, runs esptool over the local devnode (chip + features +
+# crystal + flash + base MAC), caches the result on the slot, then restarts
+# the proxy. Works on any esptool-supported chip — classic UART (ttyUSB) and
+# native-USB (ttyACM). Nothing runs automatically; only this button triggers it.
+# ---------------------------------------------------------------------------
+
+_CHIP_VARIANTS = ("S3", "S2", "C3", "C6", "C5", "C2", "H2", "P4")
+
+
+def _chip_family(chip_str):
+    """Normalise an esptool chip string to a family token.
+
+    'ESP32-S3 (QFN56) (revision v0.2)' -> 'esp32s3'
+    'ESP32-D0WD-V3 (revision v3.0)'    -> 'esp32'
+    'ESP8266EX'                        -> 'esp8266'
+    """
+    if not chip_str:
+        return None
+    s = chip_str.upper()
+    for code in _CHIP_VARIANTS:
+        if f"ESP32-{code}" in s:
+            return "esp32" + code.lower()
+    if "ESP32" in s:
+        return "esp32"
+    if "ESP8266" in s:
+        return "esp8266"
+    return None
+
+
+def _parse_esptool_output(text):
+    """Parse esptool chip_id output into structured fields (v4 + v5 labels)."""
+    info = {"chip": None, "features": None, "crystal": None,
+            "mac": None, "chip_id": None, "flash_size": None}
+    for raw in text.splitlines():
+        s = raw.strip()
+        if s.startswith("Chip is "):
+            info["chip"] = s[len("Chip is "):].strip()
+        elif s.startswith("Chip type:"):
+            info["chip"] = s[len("Chip type:"):].strip()
+        elif s.startswith("Features:"):
+            info["features"] = s[len("Features:"):].strip()
+        elif s.startswith("Crystal is "):
+            info["crystal"] = s[len("Crystal is "):].strip()
+        elif s.startswith("Crystal frequency:"):
+            info["crystal"] = s[len("Crystal frequency:"):].strip()
+        elif s.startswith("BASE MAC:"):
+            info["mac"] = s[len("BASE MAC:"):].strip()
+        elif s.startswith("MAC:") and not info["mac"]:
+            info["mac"] = s[len("MAC:"):].strip()
+        elif s.startswith("Chip ID:"):
+            info["chip_id"] = s[len("Chip ID:"):].strip()
+        elif s.startswith("Detected flash size:"):
+            info["flash_size"] = s[len("Detected flash size:"):].strip()
+    return info
+
+
+def _run_esptool(devnode, before, esptool_args, timeout):
+    """Run esptool against *devnode*; tries 'esptool.py' then 'python3 -m esptool'.
+
+    Returns (returncode, combined_output). rc=-1 if esptool is missing,
+    rc=-2 on timeout.
+    """
+    base = ["--port", devnode, "--before", before] + list(esptool_args)
+    for cmd in (["esptool.py"] + base, ["python3", "-m", "esptool"] + base):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout)
+            return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except FileNotFoundError:
+            continue
+        except subprocess.TimeoutExpired as e:
+            out = ""
+            for stream in (e.stdout, e.stderr):
+                if stream:
+                    out += stream if isinstance(stream, str) \
+                        else stream.decode("utf-8", "replace")
+            return -2, out + "\n[esptool timed out]"
+    return -1, "esptool not found (tried 'esptool.py' and 'python3 -m esptool')"
+
+
+def esptool_identify(slot, before="default_reset", timeout=30.0):
+    """Stop the proxy, run esptool chip_id, cache the result, restart the proxy.
+
+    Caches the parsed result on slot['chip_info'] (incl. chip_family) and the
+    base MAC on slot['device_id'] — both surface in /api/devices automatically.
+    """
+    label = slot.get("label") or slot.get("slot_key", "")[-20:]
+    devnode = slot.get("devnode")
+    if not devnode:
+        return {"ok": False, "error": f"{label}: no device node"}
+    if not slot.get("present"):
+        return {"ok": False, "error": f"{label}: device not present"}
+
+    # If Andreas's built-in-JTAG auto-debug owns this slot, remember it: we must
+    # stop it so esptool can reset the chip, then put it back exactly as it was
+    # so we don't leave his auto-debug torn down ("debug idle"). We reuse the
+    # already-detected chip (no re-detection). Built-in JTAG only (jtag_slot ==
+    # this slot); probe-based debug is left alone (best-effort, not in scope).
+    was_debugging = bool(label and debug_controller.is_debugging(label))
+    resume_chip = slot.get("_auto_debug_chip")
+    builtin_jtag = slot.get("_jtag_slot") == label
+    if was_debugging:
+        debug_controller.stop(label)
+        time.sleep(1)
+
+    # esptool needs exclusive access — stop the proxy first, restore it after.
+    restart = False
+    with slot["_lock"]:
+        if slot["running"]:
+            stop_proxy(slot)
+            restart = True
+    try:
+        rc, out = _run_esptool(devnode, before, ["chip_id"], timeout)
+    finally:
+        if restart:
+            time.sleep(NATIVE_USB_BOOT_DELAY_S)
+            with slot["_lock"]:
+                if not slot["running"] and not slot["_recovering"]:
+                    start_proxy(slot)
+
+    tail = "\n".join(out.splitlines()[-8:])
+    if rc == -1:
+        result = {"ok": False, "error": out}
+    else:
+        parsed = _parse_esptool_output(out)
+        if not parsed["chip"]:
+            result = {
+                "ok": False,
+                "error": (f"esptool could not identify the chip (rc={rc}). The "
+                          "board must be running firmware or be in download mode "
+                          "(native-USB/ttyACM boards often can't be reset this way)."),
+                "raw": tail,
+            }
+        else:
+            parsed["chip_family"] = _chip_family(parsed["chip"])
+            parsed["before"] = before
+            slot["chip_info"] = parsed
+            if parsed.get("mac"):
+                slot["device_id"] = parsed["mac"]
+            result = {"ok": True, **parsed, "raw": tail}
+
+    # Put Andreas's debug session back if we interrupted a built-in-JTAG one. A
+    # native-USB reset may already have re-triggered auto-debug via hotplug;
+    # debug_controller.start() is a no-op if a session already exists, so this
+    # only fills the gap rather than fighting his init.
+    if was_debugging and builtin_jtag and resume_chip and slot.get("present"):
+        try:
+            time.sleep(1)
+            if not debug_controller.is_debugging(label):
+                r = debug_controller.start(
+                    label, slot, slot.get("gdb_port"),
+                    slot.get("openocd_telnet_port"), resume_chip, None)
+                if r.get("ok"):
+                    slot["_auto_debug_chip"] = resume_chip
+                    slot["_jtag_slot"] = label
+                    log_activity(f"{label}: debug re-established after identify "
+                                 f"({resume_chip}) GDB:{slot.get('gdb_port')}", "ok")
+                else:
+                    log_activity(f"{label}: could not re-establish debug after "
+                                 f"identify — {r.get('error', '?')}", "error")
+        except Exception as exc:
+            log_activity(f"{label}: debug restore error: {exc}", "error")
+
+    return result
+
+
+def _clear_device_identity(slot):
+    """Forget cached chip/MAC so an unplugged slot stops advertising old data."""
+    slot["chip_info"] = None
+    slot["device_id"] = ""
+
+
+def _find_slot(identifier):
+    """Find a slot by label first, then fall back to slot_key."""
+    s = _find_slot_by_label(identifier)
+    if s:
+        return s
+    return slots.get(identifier)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -1693,6 +1960,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if length == 0:
             return None
         return json.loads(self.rfile.read(length))
+
+    def _handle_identify(self, slot_id):
+        """POST /api/devices/<slot>/identify — esptool chip_id on demand.
+
+        Drops the proxy, probes the chip (chip + features + crystal + flash +
+        base MAC), caches it on the slot, restarts the proxy. The cached values
+        also appear as chip_info / device_id in /api/devices.
+        """
+        slot = _find_slot(slot_id)
+        if not slot:
+            self._send_json({"ok": False, "error": f"slot '{slot_id}' not found"}, 404)
+            return
+        if not slot.get("present") or not slot.get("devnode"):
+            self._send_json({"ok": False, "error": f"{slot_id}: no device present"})
+            return
+
+        body = self._read_json() or {}
+        before = body.get("before", "default_reset")
+        if before not in ("default_reset", "no_reset", "no_reset_no_sync"):
+            before = "default_reset"
+        timeout = float(body.get("timeout", 30))
+
+        name = slot["label"] or slot_id
+        log_activity(f"identify({name}) — probing chip via esptool ({before})", "step")
+        result = esptool_identify(slot, before, timeout)
+        if result.get("ok"):
+            log_activity(
+                f"identify({name}) — {result.get('chip')}"
+                + (f" — ID {result['mac']}" if result.get("mac") else ""),
+                "ok",
+            )
+        else:
+            log_activity(f"identify({name}) — {result.get('error', 'failed')}", "error")
+        self._send_json(result)
 
     # -- routes --
 
@@ -1873,6 +2174,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_firmware_upload()
         elif path == "/api/flash":
             self._handle_flash()
+        elif path.startswith("/api/devices/") and path.endswith("/identify"):
+            # Workbench-Bridge enhancement: on-demand Identify Device
+            slot_id = unquote(path[len("/api/devices/"):-len("/identify")])
+            self._handle_identify(slot_id)
         elif path == "/api/ble/scan":
             self._handle_ble_scan()
         elif path == "/api/ble/connect":
@@ -2132,6 +2437,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 slot["devnode"] = None
                 slot["_auto_debug_chip"] = None
                 slot["_jtag_slot"] = None
+                _clear_device_identity(slot)  # Workbench-Bridge enhancement
                 if not slot["flapping"]:
                     slot["state"] = STATE_ABSENT
             else:
@@ -3670,12 +3976,14 @@ _UI_HTML = """\
         .subtitle { text-align: center; color: #aaa; font-size: 1.2em; margin-bottom: 20px; font-family: monospace; }
         h2 { color: #00d4ff; margin: 30px 0 15px; text-align: center; }
         .main-content {
-            max-width: 1600px; margin: 0 auto; width: 100%;
+            max-width: 1800px; margin: 0 auto; width: 100%;
             display: flex; flex-direction: column; flex: 1; min-height: 0;
         }
+        /* Responsive grid: ~5 cards across at 1080p (1800px container / 320px),
+           dropping to 4/3/2/1 as the viewport narrows. */
         .slots {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
         }
         .slot {
@@ -3758,6 +4066,18 @@ _UI_HTML = """\
         .btn-release:hover { background: #27ae60; }
         .btn-recover { background: #e67e22; color: #fff; }
         .btn-recover:hover { background: #d35400; }
+        .btn-identify { background: #9b59b6; color: #fff; }
+        .btn-identify:hover { background: #8e44ad; }
+        /* PID row: process id on the left, board MAC pinned to the right (white) */
+        .pid-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+        .pid-row .mac { color: #fff; font-weight: bold; font-family: monospace; letter-spacing: 0.3px; }
+        /* esptool chip identity — Steven's green card */
+        .chip-info {
+            color: #cfeede; font-size: 0.82em; margin-top: 10px;
+            padding: 8px 10px; background: rgba(46,204,113,0.12);
+            border-left: 3px solid #2ecc71; border-radius: 4px;
+            font-family: monospace; line-height: 1.5;
+        }
         .info { text-align: center; color: #666; margin-top: 30px; font-size: 0.85em; }
         /* Activity log */
         .log-section {
@@ -4133,6 +4453,27 @@ function renderSlots(slots) {
                 '<button class="btn-recover" onclick="recoverSlot(\\'' + label + '\\')">Retry Recovery</button>' +
                 '</div>';
         }
+        // esptool chip identity (filled once the Identify Device button is used)
+        let chipInfo = '';
+        const ci = s.chip_info;
+        if (ci && ci.chip) {
+            chipInfo = '<div class="chip-info">' + ci.chip +
+                (ci.crystal ? '<br>Crystal: ' + ci.crystal : '') +
+                (ci.flash_size ? '<br>Flash: ' + ci.flash_size : '') +
+                (ci.features ? '<br>Features: ' + ci.features : '') +
+                '</div>';
+        }
+        // Single manual button — drops the proxy, interrogates the chip, shows
+        // chip + MAC. Shown only until identified; it returns automatically on
+        // replug (the remove event clears the cached identity).
+        let identifyBtn = '';
+        const identified = !!(ci && ci.chip);
+        if (s.present && s.devnode && !s.is_probe && !identified) {
+            identifyBtn = '<div class="slot-actions">' +
+                '<button class="btn-identify" title="Get Device Info" ' +
+                'onclick="identifySlot(\\'' + label + '\\', this)">Identify Device</button>' +
+                '</div>';
+        }
         return `
         <div class="slot ${st}">
             <div class="slot-header">
@@ -4142,7 +4483,7 @@ function renderSlots(slots) {
             <div class="slot-info">
                 <div>Port: <span>${s.tcp_port || '-'}</span></div>
                 <div>Device: <span>${s.devnode || 'None'}</span></div>
-                ${s.pid ? '<div>PID: <span>' + s.pid + '</span></div>' : ''}
+                ${(s.pid || s.device_id) ? '<div class="pid-row"><div>' + (s.pid ? 'PID: <span>' + s.pid + '</span>' : '&nbsp;') + '</div>' + (s.device_id ? '<div class="mac">' + s.device_id + '</div>' : '') + '</div>' : ''}
                 ${s.detected_chip ? '<div>Chip: <span>' + s.detected_chip + '</span></div>' :
                   (s.present ? '<div>Chip: <span style="color:#aaa">' + identifyUsbDevice(s.usb_devices) + '</span></div>' : '')}
                 ${s.detected_chip && s.jtag_slot ? '<div>JTAG: <span>' + s.jtag_slot + (s.jtag_slot === label ? ' (built-in)' : ' (probe)') + '</span></div>' : (s.detected_chip ? '<div>JTAG: <span>none</span></div>' : '')}
@@ -4154,10 +4495,30 @@ function renderSlots(slots) {
                 ${s.running || st === 'idle' ? ipUrl || 'Proxy running' : (st === 'download_mode' ? 'In download mode — flash via RFC2217' : (s.present || st === 'resetting' || st === 'monitoring' ? 'Device present, proxy not running' : (st === 'recovering' ? 'USB unbound — recovering...' : 'No device connected')))}
             </div>
             ${s.last_error ? '<div class="error">Error: ' + s.last_error + '</div>' : ''}
+            ${chipInfo}
             ${statusMsg}
             ${actionBtns}
+            ${identifyBtn}
         </div>`;
     }).join('');
+}
+
+async function identifySlot(label, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Identifying...'; }
+    try {
+        const resp = await fetch('/api/devices/' + encodeURIComponent(label) + '/identify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: '{}'
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+            alert('Identify failed: ' + (data.error || 'unknown') +
+                  (data.raw ? '\\n\\n' + data.raw : ''));
+        }
+    } catch (e) { alert('Error: ' + e); }
+    if (btn) { btn.disabled = false; btn.textContent = 'Identify Device'; }
+    refresh();
 }
 
 
