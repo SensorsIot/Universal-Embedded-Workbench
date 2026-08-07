@@ -56,8 +56,9 @@ if [ "$UPDATE_ONLY" = false ]; then
             *) echo "WARNING: unsupported arch $ARCH for openocd-esp32, skipping"; OCD_ARCH="" ;;
         esac
         if [ -n "$OCD_ARCH" ]; then
-            OCD_VER="v0.12.0-esp32-20260304"
-            OCD_URL="https://github.com/espressif/openocd-esp32/releases/download/${OCD_VER}/openocd-esp32-linux-${OCD_ARCH}-0.12.0-esp32-20260304.tar.gz"
+            #OCD_VER="v0.12.0-esp32-20260304"
+            OCD_VER="0.12.0-esp32-20260424"
+            OCD_URL="https://github.com/espressif/openocd-esp32/releases/download/v${OCD_VER}/openocd-esp32-linux-${OCD_ARCH}-${OCD_VER}.tar.gz"
             wget -q "$OCD_URL" -O /tmp/openocd-esp32.tar.gz
             tar xzf /tmp/openocd-esp32.tar.gz -C /tmp/
             cp /tmp/openocd-esp32/bin/openocd /usr/local/bin/openocd-esp32
