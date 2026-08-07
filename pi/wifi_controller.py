@@ -313,6 +313,14 @@ def ap_start(ssid, password="", channel=6, dns_logging=False, internet=False):
             "no-resolv",
             "no-daemon",
             "log-dhcp",
+            # Answer the workbench's own name with the AP IP. Without
+            # this, dnsmasq serves the Pi's stock /etc/hosts entry
+            # (`127.0.1.1 workbench`), so an AP client whose mDNS query
+            # loses the race resolves the workbench to ITS OWN loopback
+            # and sends (e.g.) UDP logs silently nowhere. Found root-
+            # causing a DUT's first-boot-only UDP log loss, 2026-07-18.
+            "no-hosts",
+            f"host-record=workbench,workbench.local,{AP_IP}",
         ]
         if dns_logging or internet:
             dnsmasq_lines += ["server=8.8.8.8", "server=8.8.4.4"]
