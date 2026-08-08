@@ -77,6 +77,18 @@ SPECS = [
          desc="Read serial for up to `timeout` s, optionally returning when `pattern` matches.",
          props=p(slot=S_STR, pattern=S_STR, timeout=dict(**S_INT, default=10)),
          required=["slot"], timeout=90),
+    dict(name="serial_write", method="POST", path="/api/serial/write",
+         desc="Send bytes to the DUT on a slot (FR-030) — answer a console prompt, drive a "
+              "firmware CLI, push provisioning keys. Give `text` (a line) or `hex` (raw "
+              "bytes), not both. `newline` appends CRLF and defaults true, because a console "
+              "command without one is never executed. Returns {ok, written}; the device's "
+              "reply is NOT returned here — the slot's recorder captures it, so read it back "
+              "with serial_output (or serial_monitor to wait for a pattern).",
+         props=p(slot=S_STR,
+                 text=dict(**S_STR, description="line to send, without the newline"),
+                 hex=dict(**S_STR, description="raw bytes as hex, e.g. '7f480a'"),
+                 newline=dict(**S_BOOL, default=True)),
+         required=["slot"], timeout=30),
     dict(name="serial_output", method="GET", path="/api/serial/output",
          desc="Passive read of the slot's serial buffer.",
          props=p(slot=S_STR, lines=dict(**S_INT, default=40), since=S_INT), required=["slot"]),
